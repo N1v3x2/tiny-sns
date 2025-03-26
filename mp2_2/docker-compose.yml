@@ -1,0 +1,30 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13
+    container_name: rabbitmq_container
+    ports:
+      - "5552:5552"
+      - "15672:15672"
+      - "5672:5672"
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbitmq_stream advertised_host localhost"
+    networks:
+      - rabbitmq_net
+
+  ubuntu_env:
+    image: csce438_mp2_2_image
+    container_name: csce438_mp2_2_container
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/home/csce438/mp2_2  # Adjust the path as necessary
+    networks:
+      - rabbitmq_net
+    depends_on:
+      - rabbitmq
+    command: ["/bin/bash"]
+
+networks:
+  rabbitmq_net:
+    driver: bridge
+

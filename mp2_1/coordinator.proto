@@ -1,0 +1,67 @@
+syntax = "proto3";
+package csce438;
+import "google/protobuf/timestamp.proto";
+
+// ------------------------------------------------------------
+// The coordinator service definition
+// These are the different functionalities exposed by service
+// ------------------------------------------------------------
+
+// Init and Heartbeat potentially redundant
+service CoordService {
+    rpc Heartbeat (ServerInfo) returns (Confirmation) {}
+    rpc GetServer (ID) returns (ServerInfo) {}
+    // ZooKeeper API here (MP 2.2)
+    // Create a path and place data in the znode
+    rpc create (PathAndData) returns (Status) {}
+    // Check if a path exists (checking if a Master is elected
+    rpc exists (Path) returns (Status) {}
+}
+
+// server info message definition
+message ServerInfo {
+    int32 serverID = 1;
+    string hostname = 2;
+    string port = 3;
+    string type = 4;
+}
+
+// confirmation message definition
+message Confirmation {
+    bool status = 1;
+}
+
+// id message definition
+message ID {
+    int32 id = 1;
+}
+
+// TODO: MP 2.2
+
+// ServerList definition
+message ServerList {
+    repeated string serverList = 1; 
+}
+
+
+// SynchService definition
+message SynchService {
+    string test = 1;
+}
+
+
+// PathAndData definition for rpc create
+message PathAndData {
+    string path = 1;
+    string data = 2;
+}
+
+// path definition for rpc exists
+message Path {
+    string path = 1;
+}
+
+// status definition for rpc exists and create
+message Status {
+    bool status = 1;
+}

@@ -10,7 +10,7 @@ import "google/protobuf/timestamp.proto";
 // NOTE: Most of what is in this file will not be needed because communication between follower synchronizer processes uses RabbitMQ instead of gRPC.
 
 //Init and Heartbeat potentially redundant
-service CoordService{
+service CoordService {
     rpc GetSlave (ID) returns (ServerInfo) {}
     rpc Heartbeat (ServerInfo) returns (Confirmation) {}
     rpc GetServer (ID) returns (ServerInfo) {}
@@ -22,11 +22,10 @@ service CoordService{
 
     rpc GetAllFollowerServers (ID) returns (ServerList) {}
     rpc GetFollowerServer (ID) returns (ServerInfo) {}
-
 }
 
 //server info message definition
-message ServerInfo{
+message ServerInfo {
     int32 serverID = 1;
     string hostname = 2;
     string port = 3;
@@ -36,12 +35,12 @@ message ServerInfo{
 }
 
 //confirmation message definition
-message Confirmation{
+message Confirmation {
     bool status = 1;
 }
 
 //id message definition
-message ID{
+message ID {
     int32 id = 1;
 }
 
@@ -49,7 +48,7 @@ message ID{
 //two repeated string lists of each entry in a users 
 //Timeline (TL) and Follower List (FL)
 // TLFL definition
-message TLFL{
+message TLFL {
     bool status = 1;
     repeated string TL = 2; 
     repeated string FL = 3; 
@@ -58,18 +57,18 @@ message TLFL{
 
 //list of all users known of by given follower synchronizer
 // AllUsers definition
-message AllUsers{
+message AllUsers {
     repeated string users = 1; 
 }
 
-message SynchronizerListReply {
-  repeated string all_users = 1;
-  repeated string followers = 2;
+message SynchronizerListReply  {
+    repeated string all_users = 1;
+    repeated string followers = 2;
 }
 
 
 // ServerList definition
-message ServerList{
+message ServerList {
     repeated int32 serverID = 1;
     repeated string hostname = 2;
     repeated string port = 3;
@@ -81,7 +80,7 @@ message ServerList{
 //potentially add a wake up synchronization rpc to be made from
 //coordinator when it detects a server reconnects after being off
 // SynchService definition
-service SynchService{
+service SynchService {
     rpc GetAllUsers(Confirmation) returns (AllUsers) {}
     rpc GetFollowersOfClient(ID) returns (AllUsers) {}
     rpc GetTLFL(ID) returns (TLFL) {}
