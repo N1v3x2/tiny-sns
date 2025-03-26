@@ -83,4 +83,4 @@ To avoid the inteferences of residual messages from the message queues, in the `
 To avoid the inteferences from residual files, in `csce438_mp2_2_container`:
 
     rm -rf /dev/shm/*
-    rm -rd ./cluster_*
+    rm -rf ./cluster_*
