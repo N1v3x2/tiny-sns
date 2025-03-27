@@ -32,12 +32,14 @@ using grpc::ClientContext;
 using grpc::ClientReaderWriter;
 using grpc::Status;
 using google::protobuf::util::TimeUtil;
+using std::string;
+using std::cout;
 
 void sig_ignore(int sig) {
-    std::cout << "Signal caught " << sig;
+    cout << "Signal caught " << sig;
 }
 
-Message MakeMessage(const std::string& username, const std::string& msg) {
+Message MakeMessage(const string& username, const string& msg) {
     Message m;
     m.set_username(username);
     m.set_msg(msg);
@@ -50,7 +52,7 @@ Message MakeMessage(const std::string& username, const std::string& msg) {
 
 class Client : public IClient {
    public:
-    Client(std::string coord_ip, std::string coord_port, std::string uname)
+    Client(string coord_ip, string coord_port, string uname)
         : username(uname) {
         // Establish connection with coordinator
         std::unique_ptr<CoordService::Stub> coord_stub_(CoordService::NewStub(
@@ -73,13 +75,13 @@ class Client : public IClient {
 
    protected:
     virtual int connectTo();
-    virtual IReply processCommand(std::string& input);
+    virtual IReply processCommand(string& input);
     virtual void processTimeline();
 
    private:
-    std::string hostname;
-    std::string port;
-    std::string username;
+    string hostname;
+    string port;
+    string username;
 
     // You can have an instance of the client stub
     // as a member variable.
@@ -87,9 +89,9 @@ class Client : public IClient {
 
     IReply Login();
     IReply List();
-    IReply Follow(const std::string& username);
-    IReply UnFollow(const std::string& username);
-    void Timeline(const std::string& username);
+    IReply Follow(const string& username);
+    IReply UnFollow(const string& username);
+    void Timeline(const string& username);
 };
 
 ///////////////////////////////////////////////////////////
@@ -118,7 +120,7 @@ int Client::connectTo() {
     return 1;
 }
 
-IReply Client::processCommand(std::string& input) {
+IReply Client::processCommand(string& input) {
     // ------------------------------------------------------------
     // GUIDE 1:
     // In this function, you are supposed to parse the given input
@@ -164,12 +166,12 @@ IReply Client::processCommand(std::string& input) {
     // ------------------------------------------------------------
 
     IReply ire;
-    std::string cmd;
+    string cmd;
     std::stringstream ss(input);
     ss >> cmd;
 
     if (cmd == "FOLLOW") {
-        std::string toFollow;
+        string toFollow;
         if (ss >> toFollow) {
             ire = Follow(toFollow); 
         } else {
@@ -177,7 +179,7 @@ IReply Client::processCommand(std::string& input) {
             ire.comm_status = FAILURE_INVALID;
         }
     } else if (cmd == "UNFOLLOW") {
-        std::string toUnfollow; ss >> toUnfollow;
+        string toUnfollow; ss >> toUnfollow;
         ire = UnFollow(toUnfollow); 
     } else if (cmd == "LIST") {
         ire = List();
@@ -225,7 +227,7 @@ IReply Client::List() {
 }
 
 // Follow Command
-IReply Client::Follow(const std::string& username2) {
+IReply Client::Follow(const string& username2) {
     IReply ire;
 
     ClientContext context;
@@ -238,7 +240,7 @@ IReply Client::Follow(const std::string& username2) {
     ire.grpc_status = stub_->Follow(&context, request, &reply);
     if (ire.grpc_status.ok()) {
         log(INFO, "Client " + username + ": received `Follow` reply");
-        std::string msg = reply.msg();
+        string msg = reply.msg();
         if (msg == "Invalid command") {
             ire.comm_status = FAILURE_INVALID;
         } else if (msg == "Invalid username") {
@@ -256,7 +258,7 @@ IReply Client::Follow(const std::string& username2) {
 }
 
 // UNFollow Command
-IReply Client::UnFollow(const std::string& username2) {
+IReply Client::UnFollow(const string& username2) {
     IReply ire;
 
     ClientContext context;
@@ -269,7 +271,7 @@ IReply Client::UnFollow(const std::string& username2) {
     ire.grpc_status = stub_->UnFollow(&context, request, &reply);
     if (ire.grpc_status.ok()) {
         log(INFO, "Client " + username + ": received `UnFollow` reply");
-        std::string msg = reply.msg();
+        string msg = reply.msg();
         if (msg == "Invalid command") {
             ire.comm_status = FAILURE_INVALID;
         } else if (msg == "Invalid username") {
@@ -311,7 +313,7 @@ IReply Client::Login() {
 }
 
 // Timeline Command
-void Client::Timeline(const std::string& username) {
+void Client::Timeline(const string& username) {
     // ------------------------------------------------------------
     // In this function, you are supposed to get into timeline mode.
     // You may need to call a service method to communicate with
@@ -330,10 +332,9 @@ void Client::Timeline(const std::string& username) {
     // ------------------------------------------------------------
     ClientContext context;
     std::shared_ptr<ClientReaderWriter<Message, Message>> stream(
-        stub_->Timeline(&context)
-    );
+        stub_->Timeline(&context));
 
-    std::string newTimelineMsg = "Timeline";
+    string newTimelineMsg = "Timeline";
     Message newTimeline = MakeMessage(username, newTimelineMsg);
 
     log(INFO, "Client " + username + ": requesting timeline from server");
@@ -355,7 +356,7 @@ void Client::Timeline(const std::string& username) {
 
     // Write posts
     while (true) {
-        std::string msg = getPostMessage();
+        string msg = getPostMessage();
         Message new_post = MakeMessage(username, msg);
         log(INFO, "Client " + username + ": writing post to timeline");
         stream->Write(new_post);
@@ -366,12 +367,12 @@ void Client::Timeline(const std::string& username) {
 // Main Function
 /////////////////////////////////////////////
 int main(int argc, char** argv) {
-    std::string coord_ip, coord_port;
-    std::string username;
+    string coord_ip, coord_port;
+    string username;
 
     if (argc < 4) {
-        std::cout << "Expected 4 args, got " << argc << '\n';
-        std::cout << "Usage: ./tsc -h <coordinatorIP> -k <coordinatorPort> -u <userId>\n";
+        cout << "Expected 4 args, got " << argc << '\n';
+        cout << "Usage: ./tsc -h <coordinatorIP> -k <coordinatorPort> -u <userId>\n";
         return 0;
     }
 
@@ -388,11 +389,11 @@ int main(int argc, char** argv) {
                 coord_port = optarg;
                 break;
             default:
-                std::cout << "Invalid Command Line Argument\n";
+                cout << "Invalid Command Line Argument\n";
         }
     }
 
-    std::string log_file_name = std::string("client-") + username;
+    string log_file_name = string("client-") + username;
     google::InitGoogleLogging(log_file_name.c_str());
 
     log(INFO, "Client " + username + ": Logging initialized");

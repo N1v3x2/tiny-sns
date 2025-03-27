@@ -22,9 +22,9 @@
 namespace csce438 {
 
 static const char* CoordService_method_names[] = {
-  "/csce438.CoordService/GetSlave",
   "/csce438.CoordService/Heartbeat",
   "/csce438.CoordService/GetServer",
+  "/csce438.CoordService/GetSlave",
   "/csce438.CoordService/GetAllFollowerServers",
   "/csce438.CoordService/GetFollowerServer",
 };
@@ -36,35 +36,12 @@ std::unique_ptr< CoordService::Stub> CoordService::NewStub(const std::shared_ptr
 }
 
 CoordService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options)
-  : channel_(channel), rpcmethod_GetSlave_(CoordService_method_names[0], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_Heartbeat_(CoordService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetServer_(CoordService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  : channel_(channel), rpcmethod_Heartbeat_(CoordService_method_names[0], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_GetServer_(CoordService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_GetSlave_(CoordService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_GetAllFollowerServers_(CoordService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_GetFollowerServer_(CoordService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
-
-::grpc::Status CoordService::Stub::GetSlave(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerInfo* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetSlave_, context, request, response);
-}
-
-void CoordService::Stub::async::GetSlave(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetSlave_, context, request, response, std::move(f));
-}
-
-void CoordService::Stub::async::GetSlave(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetSlave_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::ServerInfo>* CoordService::Stub::PrepareAsyncGetSlaveRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::ServerInfo, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetSlave_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::ServerInfo>* CoordService::Stub::AsyncGetSlaveRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncGetSlaveRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
 
 ::grpc::Status CoordService::Stub::Heartbeat(::grpc::ClientContext* context, const ::csce438::ServerInfo& request, ::csce438::Confirmation* response) {
   return ::grpc::internal::BlockingUnaryCall< ::csce438::ServerInfo, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_Heartbeat_, context, request, response);
@@ -108,6 +85,29 @@ void CoordService::Stub::async::GetServer(::grpc::ClientContext* context, const 
 ::grpc::ClientAsyncResponseReader< ::csce438::ServerInfo>* CoordService::Stub::AsyncGetServerRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
   auto* result =
     this->PrepareAsyncGetServerRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
+::grpc::Status CoordService::Stub::GetSlave(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerInfo* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetSlave_, context, request, response);
+}
+
+void CoordService::Stub::async::GetSlave(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetSlave_, context, request, response, std::move(f));
+}
+
+void CoordService::Stub::async::GetSlave(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetSlave_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::csce438::ServerInfo>* CoordService::Stub::PrepareAsyncGetSlaveRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::ServerInfo, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetSlave_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::csce438::ServerInfo>* CoordService::Stub::AsyncGetSlaveRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncGetSlaveRaw(context, request, cq);
   result->StartCall();
   return result;
 }
@@ -162,22 +162,22 @@ CoordService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       CoordService_method_names[0],
       ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](CoordService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ID* req,
-             ::csce438::ServerInfo* resp) {
-               return service->GetSlave(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      CoordService_method_names[1],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
       new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ServerInfo, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
           [](CoordService::Service* service,
              ::grpc::ServerContext* ctx,
              const ::csce438::ServerInfo* req,
              ::csce438::Confirmation* resp) {
                return service->Heartbeat(ctx, req, resp);
+             }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      CoordService_method_names[1],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](CoordService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::csce438::ID* req,
+             ::csce438::ServerInfo* resp) {
+               return service->GetServer(ctx, req, resp);
              }, this)));
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       CoordService_method_names[2],
@@ -187,7 +187,7 @@ CoordService::Service::Service() {
              ::grpc::ServerContext* ctx,
              const ::csce438::ID* req,
              ::csce438::ServerInfo* resp) {
-               return service->GetServer(ctx, req, resp);
+               return service->GetSlave(ctx, req, resp);
              }, this)));
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       CoordService_method_names[3],
@@ -214,13 +214,6 @@ CoordService::Service::Service() {
 CoordService::Service::~Service() {
 }
 
-::grpc::Status CoordService::Service::GetSlave(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
 ::grpc::Status CoordService::Service::Heartbeat(::grpc::ServerContext* context, const ::csce438::ServerInfo* request, ::csce438::Confirmation* response) {
   (void) context;
   (void) request;
@@ -235,6 +228,13 @@ CoordService::Service::~Service() {
   return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
 }
 
+::grpc::Status CoordService::Service::GetSlave(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
 ::grpc::Status CoordService::Service::GetAllFollowerServers(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerList* response) {
   (void) context;
   (void) request;
@@ -243,235 +243,6 @@ CoordService::Service::~Service() {
 }
 
 ::grpc::Status CoordService::Service::GetFollowerServer(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
-
-static const char* SynchService_method_names[] = {
-  "/csce438.SynchService/GetAllUsers",
-  "/csce438.SynchService/GetFollowersOfClient",
-  "/csce438.SynchService/GetTLFL",
-  "/csce438.SynchService/ResynchServer",
-  "/csce438.SynchService/SynchronizerList",
-};
-
-std::unique_ptr< SynchService::Stub> SynchService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
-  (void)options;
-  std::unique_ptr< SynchService::Stub> stub(new SynchService::Stub(channel, options));
-  return stub;
-}
-
-SynchService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options)
-  : channel_(channel), rpcmethod_GetAllUsers_(SynchService_method_names[0], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetFollowersOfClient_(SynchService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetTLFL_(SynchService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_ResynchServer_(SynchService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_SynchronizerList_(SynchService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  {}
-
-::grpc::Status SynchService::Stub::GetAllUsers(::grpc::ClientContext* context, const ::csce438::Confirmation& request, ::csce438::AllUsers* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::Confirmation, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetAllUsers_, context, request, response);
-}
-
-void SynchService::Stub::async::GetAllUsers(::grpc::ClientContext* context, const ::csce438::Confirmation* request, ::csce438::AllUsers* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::Confirmation, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetAllUsers_, context, request, response, std::move(f));
-}
-
-void SynchService::Stub::async::GetAllUsers(::grpc::ClientContext* context, const ::csce438::Confirmation* request, ::csce438::AllUsers* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetAllUsers_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::AllUsers>* SynchService::Stub::PrepareAsyncGetAllUsersRaw(::grpc::ClientContext* context, const ::csce438::Confirmation& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::AllUsers, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetAllUsers_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::AllUsers>* SynchService::Stub::AsyncGetAllUsersRaw(::grpc::ClientContext* context, const ::csce438::Confirmation& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncGetAllUsersRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
-::grpc::Status SynchService::Stub::GetFollowersOfClient(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::AllUsers* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetFollowersOfClient_, context, request, response);
-}
-
-void SynchService::Stub::async::GetFollowersOfClient(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::AllUsers* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetFollowersOfClient_, context, request, response, std::move(f));
-}
-
-void SynchService::Stub::async::GetFollowersOfClient(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::AllUsers* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetFollowersOfClient_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::AllUsers>* SynchService::Stub::PrepareAsyncGetFollowersOfClientRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::AllUsers, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetFollowersOfClient_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::AllUsers>* SynchService::Stub::AsyncGetFollowersOfClientRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncGetFollowersOfClientRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
-::grpc::Status SynchService::Stub::GetTLFL(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::TLFL* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::TLFL, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetTLFL_, context, request, response);
-}
-
-void SynchService::Stub::async::GetTLFL(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::TLFL* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::TLFL, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetTLFL_, context, request, response, std::move(f));
-}
-
-void SynchService::Stub::async::GetTLFL(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::TLFL* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetTLFL_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::TLFL>* SynchService::Stub::PrepareAsyncGetTLFLRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::TLFL, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetTLFL_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::TLFL>* SynchService::Stub::AsyncGetTLFLRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncGetTLFLRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
-::grpc::Status SynchService::Stub::ResynchServer(::grpc::ClientContext* context, const ::csce438::ServerInfo& request, ::csce438::Confirmation* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ServerInfo, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_ResynchServer_, context, request, response);
-}
-
-void SynchService::Stub::async::ResynchServer(::grpc::ClientContext* context, const ::csce438::ServerInfo* request, ::csce438::Confirmation* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ServerInfo, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_ResynchServer_, context, request, response, std::move(f));
-}
-
-void SynchService::Stub::async::ResynchServer(::grpc::ClientContext* context, const ::csce438::ServerInfo* request, ::csce438::Confirmation* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_ResynchServer_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::Confirmation>* SynchService::Stub::PrepareAsyncResynchServerRaw(::grpc::ClientContext* context, const ::csce438::ServerInfo& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::Confirmation, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_ResynchServer_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::Confirmation>* SynchService::Stub::AsyncResynchServerRaw(::grpc::ClientContext* context, const ::csce438::ServerInfo& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncResynchServerRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
-::grpc::Status SynchService::Stub::SynchronizerList(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::SynchronizerListReply* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::SynchronizerListReply, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_SynchronizerList_, context, request, response);
-}
-
-void SynchService::Stub::async::SynchronizerList(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::SynchronizerListReply* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::SynchronizerListReply, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_SynchronizerList_, context, request, response, std::move(f));
-}
-
-void SynchService::Stub::async::SynchronizerList(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::SynchronizerListReply* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_SynchronizerList_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::SynchronizerListReply>* SynchService::Stub::PrepareAsyncSynchronizerListRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::SynchronizerListReply, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_SynchronizerList_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::SynchronizerListReply>* SynchService::Stub::AsyncSynchronizerListRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncSynchronizerListRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
-SynchService::Service::Service() {
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      SynchService_method_names[0],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< SynchService::Service, ::csce438::Confirmation, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](SynchService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::Confirmation* req,
-             ::csce438::AllUsers* resp) {
-               return service->GetAllUsers(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      SynchService_method_names[1],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< SynchService::Service, ::csce438::ID, ::csce438::AllUsers, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](SynchService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ID* req,
-             ::csce438::AllUsers* resp) {
-               return service->GetFollowersOfClient(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      SynchService_method_names[2],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< SynchService::Service, ::csce438::ID, ::csce438::TLFL, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](SynchService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ID* req,
-             ::csce438::TLFL* resp) {
-               return service->GetTLFL(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      SynchService_method_names[3],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< SynchService::Service, ::csce438::ServerInfo, ::csce438::Confirmation, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](SynchService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ServerInfo* req,
-             ::csce438::Confirmation* resp) {
-               return service->ResynchServer(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      SynchService_method_names[4],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< SynchService::Service, ::csce438::ID, ::csce438::SynchronizerListReply, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](SynchService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ID* req,
-             ::csce438::SynchronizerListReply* resp) {
-               return service->SynchronizerList(ctx, req, resp);
-             }, this)));
-}
-
-SynchService::Service::~Service() {
-}
-
-::grpc::Status SynchService::Service::GetAllUsers(::grpc::ServerContext* context, const ::csce438::Confirmation* request, ::csce438::AllUsers* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
-::grpc::Status SynchService::Service::GetFollowersOfClient(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::AllUsers* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
-::grpc::Status SynchService::Service::GetTLFL(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::TLFL* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
-::grpc::Status SynchService::Service::ResynchServer(::grpc::ServerContext* context, const ::csce438::ServerInfo* request, ::csce438::Confirmation* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
-::grpc::Status SynchService::Service::SynchronizerList(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::SynchronizerListReply* response) {
   (void) context;
   (void) request;
   (void) response;

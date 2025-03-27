@@ -72,36 +72,47 @@ using grpc::ServerContext;
 using grpc::ServerReaderWriter;
 using grpc::Status;
 using grpc::ClientContext;
-using std::string, std::to_string;
-using std::vector, std::map;
-using std::fstream;
+using google::protobuf::Timestamp;
+using std::string;
+using std::to_string;
+using std::vector;
+using std::map;
+using std::ifstream, std::ofstream;
+using std::unique_ptr;
+using std::cout, std::endl;
 
-const string USER_DIR = "./users/";
 int server_id, cluster_id;
-std::unique_ptr<CoordService::Stub> coord_stub;
+string cluster_dir, server_dir, all_users_file;
+unique_ptr<CoordService::Stub> coord_stub;
 
 struct Client {
     string username;
-    map<string, Client*> client_followers;
-    map<string, Client*> client_following;
+    map<string, Client*> followers;
+    map<string, Client*> following;
+    Client(string& uname) : username(uname) {}
     bool operator==(const Client& c1) const {
         return (username == c1.username);
     }
 };
 
+std::mutex client_mtx;
 map<string, Client*> client_db;
 
 ServerInfo GetSlaveInfo();
+unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port);
+Message MakeMessage(const string& username, const string& msg);
 
 class SNSServiceImpl final : public SNSService::Service {
     Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
         log(INFO, "Received `List` request " + request->username());
 
+        std::lock_guard<std::mutex> lock(client_mtx);
+
         for (auto& [uname, _] : client_db)
             list_reply->add_all_users(uname);
 
         Client* client = client_db[request->username()];
-        for (auto& [follower_uname, _] : client->client_followers)
+        for (auto& [follower_uname, _] : client->followers)
             list_reply->add_followers(follower_uname);
 
         log(INFO, "Sending `List` to client...");
@@ -116,104 +127,114 @@ class SNSServiceImpl final : public SNSService::Service {
             reply->set_msg("Invalid command");
             return Status::OK;
         }
-
         string to_follow = request->arguments(0);
 
-        if (!client_db.count(to_follow)) {
-            reply->set_msg("Invalid username");
-            return Status::OK;
+        {
+            std::lock_guard<std::mutex> lock(client_mtx);
+
+            if (!client_db.count(to_follow)) {
+                reply->set_msg("Invalid username");
+                return Status::OK;
+            }
+            Client* client = client_db[username];
+            Client* client_to_follow = client_db[to_follow];
+
+            if (client->following.count(to_follow) || client == client_to_follow) {
+                reply->set_msg("Input username already exists");
+                return Status::OK;
+            }
+
+            client->following[to_follow] = client_to_follow;
+            client_to_follow->followers[username] = client;
         }
-        Client* client = client_db[username];
-        Client* client_to_follow = client_db[to_follow];
 
-        if (client->client_following.count(to_follow) || client == client_to_follow) {
-            reply->set_msg("Input username already exists");
-            return Status::OK;
-        }
+        // Write to files
+        ofstream fs(server_dir + username + "_following.txt", std::ios::app);
+        fs << to_follow << endl;
+        fs.close();
 
-        client->client_following[to_follow] = client_to_follow;
-        client_to_follow->client_followers[username] = client;
+        fs.open(server_dir + to_follow + "_followers.txt", std::ios::app);
+        fs << username << endl;
+        fs.close();
 
-        // Master: replicate to slave
         ServerInfo slave_info = GetSlaveInfo();
+        bool isMaster = slave_info.serverid() != server_id;
 
-        // Master only: replicate new user to slave
-        if (slave_info.serverid() != server_id) {
-            string slave_addr = slave_info.hostname() + ":" + slave_info.port();
-            std::unique_ptr<SNSService::Stub> slave_stub(SNSService::NewStub(
-                grpc::CreateChannel(slave_addr, grpc::InsecureChannelCredentials())
-            ));
+        // Master: replicate new user to slave
+        if (isMaster) {
+            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
+                slave_info.hostname(), slave_info.port());
 
-            ClientContext client_ctx;
+            ClientContext master_slave_ctx;
             Request req; req.set_username(username); req.add_arguments(to_follow);
             Reply rep;
             log(INFO, "Master: replicating Follow state to slave");
-            slave_stub->Follow(&client_ctx, req, &rep);
+            slave_stub->Follow(&master_slave_ctx, req, &rep);
         }
 
         return Status::OK;
     }
 
-    // Not used for MP 2.2
-    // Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
-    //     string username = request->username();
-    //     log(INFO, "Received `UnFollow` request from client " + username);
+    /* Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
+        string username = request->username();
+        log(INFO, "Received `UnFollow` request from client " + username);
 
-    //     if (request->arguments_size() < 1) {
-    //         reply->set_msg("Invalid command");
-    //         return Status::OK;
-    //     }
+        if (request->arguments_size() < 1) {
+            reply->set_msg("Invalid command");
+            return Status::OK;
+        }
 
-    //     Client* client = client_db[username];
+        Client* client = client_db[username];
 
-    //     string username2 = request->arguments(0);
-    //     if (!client->client_following.count(username2)) {
-    //         reply->set_msg("Invalid username");
-    //         return Status::OK;
-    //     }
+        string username2 = request->arguments(0);
+        if (!client->client_following.count(username2)) {
+            reply->set_msg("Invalid username");
+            return Status::OK;
+        }
 
-    //     client->client_following.erase(username2);
+        client->client_following.erase(username2);
 
-    //     Client* to_unfollow = client_db[username2];
-    //     to_unfollow->client_followers.erase(username);
+        Client* to_unfollow = client_db[username2];
+        to_unfollow->client_followers.erase(username);
 
-    //     return Status::OK;
-    // }
+        return Status::OK;
+    } */
 
     // RPC Login
     Status Login(ServerContext* context, const Request* request, Reply* reply) override {
         string username = request->username();
         log(INFO, "Received `Login` request from client " + username);
 
-        // Check whether the user already exists
-        if (client_db.count(username)) {
-            reply->set_msg("Username already exists");
-            return Status::OK;
+        {
+            std::lock_guard<std::mutex> lock(client_mtx);
+
+            // Check whether the user already exists
+            if (client_db.count(username)) {
+                reply->set_msg("Username already exists");
+                return Status::OK;
+            }
+
+            client_db[username] = new Client(username);
         }
 
-        Client* client = new Client();
-        client->username = username;
-        client_db[username] = client;
-
-        // Create user file so other users can buffer posts there
-        mkdir(USER_DIR.data(), 0777);
-        string user_file = USER_DIR + username + ".txt";
-        fstream fs(user_file, std::ios::out);
+        // Create user files
+        ofstream fs(server_dir + username + ".txt"); fs.close();
+        fs.open(server_dir + username + "_following.txt"); fs.close();
+        fs.open(server_dir + username + "_followers.txt"); fs.close();
 
         ServerInfo slave_info = GetSlaveInfo();
+        bool isMaster = slave_info.serverid() != server_id;
 
-        // Master only: replicate new user to slave
-        if (slave_info.serverid() != server_id) {
-            string slave_addr = slave_info.hostname() + ":" + slave_info.port();
-            std::unique_ptr<SNSService::Stub> slave_stub(SNSService::NewStub(
-                grpc::CreateChannel(slave_addr, grpc::InsecureChannelCredentials())
-            ));
+        // Master: replicate to slave
+        if (isMaster) {
+            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
+                slave_info.hostname(), slave_info.port());
 
-            ClientContext client_ctx;
+            ClientContext master_slave_ctx;
             Request req; req.set_username(username);
             Reply rep;
             log(INFO, "Master: replicating Login state to slave");
-            slave_stub->Login(&client_ctx, req, &rep);
+            slave_stub->Login(&master_slave_ctx, req, &rep);
         }
 
         return Status::OK;
@@ -228,7 +249,8 @@ class SNSServiceImpl final : public SNSService::Service {
         // Set the current user based on the first message received
         if (stream->Read(&msg)) {
             username = msg.username();
-            user_file = USER_DIR + username + ".txt";
+            user_file = server_dir + username + ".txt";
+            std::lock_guard<std::mutex> lock(client_mtx);
             client = client_db[username];
         } else {
             return Status::OK;
@@ -237,55 +259,83 @@ class SNSServiceImpl final : public SNSService::Service {
         log(INFO, "Received `Timeline` request from client " + username);
 
         // Use background thread to monitor changes to the user's file
-        std::thread monitor_posts([stream, user_file, client]() {
-            fstream fs;
+        std::thread monitor_timeline([stream, user_file, client]() {
+            ifstream fs;
             char fill;
-            std::tm post_time {};
+            std::tm post_time{};
             string post_user, post_content, dummy;
             Message timeline_msg;
 
+            time_t last_read = 0;
+
             while (true) {
-                fs.open(user_file, std::ios::in);
+                // TODO: synchronize access to user file
+                fs.open(user_file);
                 vector<Message> msgs;
 
-                // Read all buffered posts from the user's file
-                while (fs.peek() != EOF) {
+                // Only read new posts (since last read)
+                while (fs.peek() != ifstream::traits_type::eof()) {
                     fs >> fill >> std::ws >> std::get_time(&post_time, "%a %b %d %H:%M:%S %Y")
-                        >> fill >> post_user
-                        >> fill >> std::ws;
+                       >> fill >> post_user
+                       >> fill >> std::ws;
                     std::getline(fs, post_content);
                     std::getline(fs, dummy);
 
-                    if (!fs.good()) break;
+                    if (std::mktime(&post_time) <= last_read) break;
 
-                    google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+                    Timestamp* timestamp = new Timestamp();
                     timestamp->set_seconds(std::mktime(&post_time));
                     timestamp->set_nanos(0);
+
                     timeline_msg.set_allocated_timestamp(timestamp);
                     timeline_msg.set_username(post_user);
                     timeline_msg.set_msg(post_content);
                     msgs.push_back(timeline_msg);
                 }
 
-                log(INFO, "User " + client->username + " has unread posts; sending latest 20 posts...");
+                last_read = time(nullptr);
 
-                // Only read up to 20 latest posts buffered in the file
-                int n = (int)msgs.size();
-                for (int i = n - 1; i >= std::max(0, n - 21); --i) {
-                    stream->Write(msgs[i]);
+                if (!msgs.empty()) {
+                    log(INFO,
+                        "User " +
+                        client->username +
+                        " has unread posts; sending latest posts...");
+                    for (int i = (int)msgs.size() - 1; i >= 0; --i)
+                        stream->Write(msgs[i]);
                 }
 
                 fs.close();
                 fs.clear();
+                sleep(5);
             }
         });
 
-        fstream fs;
+        // Slave replication
+        ServerInfo slave_info = GetSlaveInfo();
+        bool isMaster = slave_info.serverid() != server_id;
+
+        std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slave_stream;
+        ClientContext master_slave_ctx;
+
+        if (isMaster) {
+            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
+                slave_info.hostname(), slave_info.port());
+            slave_stream = slave_stub->Timeline(&master_slave_ctx);
+
+            // Establish timeline connection to slave
+            log(INFO, "Master: establishing timeline connection to slave");
+            string conn_msg = "Timeline";
+            slave_stream->Write(MakeMessage(username, conn_msg));
+        }
+
+        ofstream fs;
         while (stream->Read(&msg)) {
             // Write posts to all followers
             log(INFO, "User " + client->username + " just posted; sending post to followers...");
-            for (auto& [follower_uname, follower] : client->client_followers) {
-                string follower_file = USER_DIR + follower_uname + ".txt";
+
+            std::lock_guard<std::mutex> lock(client_mtx);
+            for (auto& [follower_uname, follower] : client->followers) {
+                string follower_file = server_dir + follower_uname + ".txt";
 
                 fs.open(follower_file, std::ios::app);
 
@@ -293,26 +343,49 @@ class SNSServiceImpl final : public SNSService::Service {
                 std::tm* t = gmtime(&curr_time);
 
                 fs << "T " << asctime(t)
-                    << "U " << username << '\n'
-                    << "W " << msg.msg() << '\n';
+                   << "U " << username << '\n'
+                   << "W " << msg.msg() << '\n';
 
                 fs.close();
                 fs.clear();
+
+                // Master: replicate to slave
+                if (isMaster) {
+                    log(INFO, "Master: replicating timeline post to slave");
+                    slave_stream->Write(msg);
+                }
             }
         }
 
-        monitor_posts.join();
+        monitor_timeline.join();
 
         return Status::OK;
     }
 };
 
 ServerInfo GetSlaveInfo() {
-    ClientContext client_ctx;
+    ClientContext master_slave_ctx;
     ID id; id.set_id(cluster_id);
     ServerInfo slave_info;
-    coord_stub->GetSlave(&client_ctx, id, &slave_info);
+    coord_stub->GetSlave(&master_slave_ctx, id, &slave_info);
     return slave_info;
+}
+
+unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port) {
+    string slave_addr = hostname + ":" + port;
+    return SNSService::NewStub(
+        grpc::CreateChannel(slave_addr, grpc::InsecureChannelCredentials()));
+}
+
+Message MakeMessage(const string& username, const string& msg) {
+    Message m;
+    m.set_username(username);
+    m.set_msg(msg);
+    google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+    timestamp->set_seconds(time(NULL));
+    timestamp->set_nanos(0);
+    m.set_allocated_timestamp(timestamp);
+    return m;
 }
 
 // Background heartbeat thread function
@@ -323,28 +396,22 @@ void Heartbeat(
 ) {
     const string hostname = "0.0.0.0";
     string coord_address = coord_ip + ":" + coord_port;
-    string cluster_key = "clusterid";
-    string cluster_id_str = to_string(cluster_id);
-
-    std::unique_ptr<CoordService::Stub> stub_(CoordService::NewStub(
-        grpc::CreateChannel(coord_address, grpc::InsecureChannelCredentials())
-    ));
 
     ServerInfo info;
     info.set_serverid(server_id);
     info.set_hostname(hostname);
     info.set_port(port_no);
     info.set_type("server");
+    info.set_clusterid(cluster_id);
 
     Confirmation confirmation;
 
     // Send heartbeat every 5 seconds
     while (true) {
         ClientContext context;
-        context.AddMetadata(cluster_key, cluster_id_str);
 
         log(INFO, "Sending heartbeat to coordinator");
-        grpc::Status status = stub_->Heartbeat(&context, info, &confirmation);
+        grpc::Status status = coord_stub->Heartbeat(&context, info, &confirmation);
         if (!status.ok() || !confirmation.status()) {
             log(ERROR, "Heartbeat did not receive reply from coordinator");
             std::terminate();
@@ -352,6 +419,43 @@ void Heartbeat(
         log(INFO, "Received heartbeat confirmation from coordinator");
 
         sleep(5);
+    }
+}
+
+void UpdateClientDB() {
+    ifstream fs;
+    string username, follower, following;
+    while (true) {
+        sleep(5);
+
+        std::lock_guard<std::mutex> lock(client_mtx);
+
+        // Update list of users
+        fs.open(all_users_file);
+        while (fs.peek() != ifstream::traits_type::eof()) {
+            getline(fs, username);
+            if (!client_db.count(username))
+                client_db[username] = new Client(username);
+        }
+        fs.close();
+
+        // Update follower & following information
+        for (auto& [uname, user] : client_db) {
+            fs.open(server_dir + uname + "_following.txt");
+            while (fs.peek() != ifstream::traits_type::eof()) {
+                getline(fs, following);
+                if (!user->following.count(following))
+                    user->following[following] = client_db[following];
+            }
+            fs.close();
+
+            fs.open(server_dir + uname + "_followers.txt");
+            while (fs.peek() != ifstream::traits_type::eof()) {
+                getline(fs, follower);
+                if (!user->followers.count(follower))
+                    user->followers[follower] = client_db[follower];
+            }
+        }
     }
 }
 
@@ -367,21 +471,25 @@ void RunServer(
     ServerBuilder builder;
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
-    std::unique_ptr<Server> server(builder.BuildAndStart());
-    std::cout << "Server listening on " << server_address << std::endl;
+    unique_ptr<Server> server(builder.BuildAndStart());
+    cout << "Server listening on " << server_address << std::endl;
     log(INFO, "Server listening on " + server_address);
-
-    // Create background thread to send heartbeats to coordinator
-    std::thread heartbeat(Heartbeat, coord_ip, coord_port, port_no);
-    heartbeat.detach();
 
     // Establish connection to coordinator
     string coord_address = coord_ip + ":" + coord_port;
     coord_stub = CoordService::NewStub(
-        grpc::CreateChannel(coord_address, grpc::InsecureChannelCredentials())
-    );
+        grpc::CreateChannel(coord_address, grpc::InsecureChannelCredentials()));
+
+    // Backtrack thread to update `client_db`
+    std::thread update_client_db(UpdateClientDB);
+
+    // Create background thread to send heartbeats to coordinator
+    std::thread heartbeat(Heartbeat, coord_ip, coord_port, port_no);
 
     server->Wait();
+
+    update_client_db.join();
+    heartbeat.join();
 }
 
 int main(int argc, char** argv) {
@@ -389,8 +497,8 @@ int main(int argc, char** argv) {
     string port;
 
     if (argc < 6) {
-        std::cout << "Expected 6 args, got " << argc << '\n';
-        std::cout << "Usage: ./tsd -c <clusterId> -s <serverId> -h <coordinatorIP> -k <coordinatorPort> -p <portNum>\n";
+        cout << "Expected 6 args, got " << argc << '\n';
+        cout << "Usage: ./tsd -c <clusterId> -s <serverId> -h <coordinatorIP> -k <coordinatorPort> -p <portNum>\n";
         return 0;
     }
 
@@ -420,6 +528,14 @@ int main(int argc, char** argv) {
     string log_file_name = string("server-") + port;
     google::InitGoogleLogging(log_file_name.c_str());
     log(INFO, "Logging initialized");
+
+    cluster_dir = "./cluster" + to_string(cluster_id) + "/";
+    server_dir = cluster_dir + to_string(server_id) + "/";
+    mkdir(cluster_dir.data(), 0777);
+    mkdir(server_dir.data(), 0777);
+
+    all_users_file = server_dir + "all_users.txt";
+    ofstream fs(all_users_file); fs.close();
 
     RunServer(coord_ip, coord_port, port);
 
