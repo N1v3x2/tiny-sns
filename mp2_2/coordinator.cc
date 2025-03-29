@@ -51,7 +51,6 @@ struct zNode {
 
 const string SERVER = "server", SYNCER = "syncer";
 
-// potentially thread safe 
 std::mutex v_mutex;
 
 using table = vector<vector<zNode*>>;
@@ -117,7 +116,7 @@ class CoordServiceImpl final : public CoordService::Service {
 
         int cluster_id = (client_id - 1) % 3 + 1;
 
-        // Retrieve the client's server based on the calculation above
+        // First active server in the routing table is the master
         zNode* server;
         for (auto& s : routing_table[cluster_id - 1]) {
             if (s->isActive()) {
@@ -226,11 +225,8 @@ std::time_t getTimeNow() {
 void checkHeartbeat() {
     while (true) {
         // check each server for a heartbeat in the last 10 seconds
-        // Your code below
+        std::lock_guard<std::mutex> lock(v_mutex);
 
-        v_mutex.lock();
-
-        // iterating through the clusters vector of vectors of znodes
         for (auto& c : routing_table) {
             for (auto& s : c) {
                 if (difftime(getTimeNow(), s->last_heartbeat) > 10) {
@@ -242,7 +238,6 @@ void checkHeartbeat() {
             }
         }
 
-        v_mutex.unlock();
         sleep(3);
     }
 }

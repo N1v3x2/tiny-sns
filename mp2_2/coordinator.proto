@@ -7,8 +7,6 @@ import "google/protobuf/timestamp.proto";
 // These are the different functionalities exposed by service
 // ------------------------------------------------------------
 
-// NOTE: Most of what is in this file will not be needed because communication between follower synchronizer processes uses RabbitMQ instead of gRPC.
-
 service CoordService {
     rpc Heartbeat (ServerInfo) returns (Confirmation) {}
     rpc GetServer (ID) returns (ServerInfo) {}
