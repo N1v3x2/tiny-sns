@@ -414,8 +414,8 @@ Message MakeMessage(const string& username, const string& msg) {
 void Heartbeat(
     string coord_ip,
     string coord_port,
-    string port_no
-) {
+    string port_no)
+{
     const string hostname = "0.0.0.0";
     string coord_address = coord_ip + ":" + coord_port;
 
@@ -492,8 +492,8 @@ void UpdateClientDB() {
 void RunServer(
     string coord_ip,
     string coord_port,
-    string port_no
-) {
+    string port_no)
+{
     const string hostname = "0.0.0.0";
     string server_address = hostname + ":" + port_no;
     SNSServiceImpl service;

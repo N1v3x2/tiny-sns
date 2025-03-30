@@ -10,13 +10,12 @@
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
 #include <chrono>
+#include <iomanip>
 #include <semaphore.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unordered_map>
 #include <vector>
-#include <unordered_set>
-#include <filesystem>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -24,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <stdlib.h>
 #include <stdio.h>
 #include <cstdlib>
@@ -50,6 +50,7 @@ using csce438::CoordService;
 using csce438::ID;
 using csce438::ServerInfo;
 using csce438::ServerList;
+using grpc::ClientContext;
 using std::ifstream, std::ofstream;
 using std::string, std::to_string;
 using std::vector;
@@ -57,6 +58,7 @@ using std::unordered_map;
 using std::unique_ptr;
 using std::stoi;
 using std::mutex, std::lock_guard;
+using std::condition_variable;
 
 class SemGuard {
     sem_t* sem;
@@ -81,13 +83,12 @@ public:
 
 int synchID = 1;
 int clusterID = 1;
-
-unique_ptr<CoordService::Stub> coord_stub_;
-int registered_synchronizers = 6; // update this by asking coordinator
+unique_ptr<CoordService::Stub> coord_stub;
 string coordAddr;
-string clusterSubdirectory; // Server ID this synchronizer belongs to
-vector<string> otherHosts;
-mutex otherHostsMtx;
+vector<int> otherSyncs;
+mutex syncsMtx, registeredMtx;
+condition_variable registeredCV;
+bool registered = false, isMaster = false;
 
 vector<string> get_lines_from_file(const string&);
 vector<string> get_all_users();
@@ -174,12 +175,10 @@ public:
 
     void consumeUserLists() {
         vector<string> allUsers;
-        // YOUR CODE HERE
 
-        // TODO: while the number of synchronizers is harcorded as 6 right now, you need to change this
-        // to use the correct number of follower synchronizers that exist overall
-        // accomplish this by making a gRPC request to the coordinator asking for the list of all follower synchronizers registered with it
-        for (int i = 1; i <= 6; i++) {
+        lock_guard<mutex> lock(syncsMtx);
+
+        for (int i = 1; i <= (int)otherSyncs.size(); i++) {
             string queueName = "synch" + to_string(i) + "_users_queue";
             string message = consumeMessage(queueName, 1000); // 1 second timeout
             if (!message.empty()) {
@@ -219,10 +218,9 @@ public:
     void consumeClientRelations() {
         vector<string> allUsers = get_all_users();
 
-        // YOUR CODE HERE
+        lock_guard<mutex> lock(syncsMtx);
 
-        // TODO: hardcoding 6 here, but you need to get list of all synchronizers from coordinator as before
-        for (int i = 1; i <= 6; i++) {
+        for (int i = 1; i <= (int)otherSyncs.size(); i++) {
             string queueName = "synch" + to_string(i) + "_clients_relations_queue";
             string message = consumeMessage(queueName, 1000); // 1 second timeout
 
@@ -252,9 +250,8 @@ public:
     // by publishing your user's timeline file (or just the new updates in them)
     //  periodically to the message queue of the synchronizer responsible for that client
     void publishTimelines() {
-        vector<string> users = get_all_users();
-
-        for (const auto &client : users) {
+        Json::FastWriter writer;
+        for (const auto &client : get_all_users()) {
             int clientId = stoi(client);
             int client_cluster = ((clientId - 1) % 3) + 1;
             // only do this for clients in your own cluster
@@ -262,14 +259,24 @@ public:
                 continue;
             }
 
-            vector<string> timeline = get_tl_or_fl(clientId, true);
-            vector<string> followers = getFollowersOfUser(clientId);
+            Json::Value timelineJson;
+            for (const auto& line : get_tl_or_fl(clientId, true)) {
+                timelineJson["lines"].append(line);
+            }
 
-            for (const auto &follower : followers) {
-                // send the timeline updates of your current user to all its followers
+            ID id;
+            ServerInfo info;
+            for (const auto &follower : getFollowersOfUser(clientId)) {
+                // Determine which synchronizer is responsible for each follower
+                ClientContext ctx;
+                int followerCluster = ((stoi(follower) - 1) % 3 ) + 1;
+                id.set_id(followerCluster);
+                coord_stub->GetFollowerServer(&ctx, id, &info);
 
-                // YOUR CODE HERE
-
+                timelineJson["client"] = follower;
+                string timelineMsg = writer.write(timelineJson);
+                publishMessage("sync" + to_string(info.serverid()) + "_timeline_queue",
+                               timelineMsg);
             }
         }
     }
@@ -280,10 +287,51 @@ public:
         string message = consumeMessage(queueName, 1000); // 1 second timeout
 
         if (!message.empty()) {
-            // consume the message from the queue and update the timeline file of the appropriate client with
-            // the new updates to the timeline of the user it follows
+            Json::Value root;
+            Json::Reader reader;
+            if (reader.parse(message, root)) {
+                string client = root["user"].asString();
 
-            // YOUR CODE HERE
+                // Determine latest message timestamp from user's file
+                time_t lastTimestamp = 0;
+
+                string clientFile = get_dir_prefix() + client + ".txt";
+                SemGuard lock(clientFile);
+
+                std::fstream fs(get_dir_prefix() + client + ".txt", fs.in | fs.out);
+                char fill;
+                std::tm postTime{};
+                string postUser, postContent, dummy;
+                while (fs.peek() != ifstream::traits_type::eof()) {
+                    fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
+                       >> fill >> postUser
+                       >> fill >> std::ws;
+                    std::getline(fs, postContent);
+                    std::getline(fs, dummy);
+                    lastTimestamp = std::mktime(&postTime);
+                }
+                fs.clear();
+
+                // Only add new posts to the user's timeline file
+                vector<string> lines;
+                for (const auto& line : root["lines"]) {
+                    lines.push_back(line.asString());
+                }
+
+                std::istringstream ss;
+                for (int i = 0; i < (int)lines.size(); i += 4) {
+                    ss.clear();
+                    ss.str(lines[i]);
+                    ss >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y");
+                    time_t t = std::mktime(&postTime);
+                    if (t > lastTimestamp) {
+                        // Write the next 4 lines to the user file, which corresponds to a single post
+                        for (int j = i; j < i + 4; ++j) {
+                            fs << lines[j] << '\n';
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -292,16 +340,20 @@ private:
         string usersFile = get_dir_prefix() + "all_users.txt";
         SemGuard fileLock(usersFile);
 
-        ofstream userStream(usersFile, std::ios::app);
+        ofstream fs(usersFile, fs.app);
         for (string user : users)
             if (!file_contains_user(usersFile, user))
-                userStream << user << std::endl;
+                fs << user << std::endl;
     }
 };
 
 void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ);
 
 void RunServer(string port_no) {
+    // Wait for registration before continuing
+    std::unique_lock<mutex> lock(registeredMtx);
+    registeredCV.wait(lock, []{ return registered; });
+
     // Initialize RabbitMQ connection
     SynchronizerRabbitMQ rabbitMQ("rabbitmq", 5672, synchID);
 
@@ -313,7 +365,7 @@ void RunServer(string port_no) {
             rabbitMQ.consumeUserLists();
             rabbitMQ.consumeClientRelations();
             rabbitMQ.consumeTimelines();
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            sleep(5);
         }
     });
 
@@ -351,7 +403,7 @@ int main(int argc, char **argv) {
     log(INFO, "Logging Initialized. Server starting...");
 
     coordAddr = coordIP + ":" + coordPort;
-    coord_stub_ = CoordService::NewStub(
+    coord_stub = CoordService::NewStub(
         grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
     clusterID = ((synchID - 1) % 3) + 1;
@@ -367,9 +419,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ)
-{
-
+void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
     ServerInfo msg;
     Confirmation c;
 
@@ -378,7 +428,6 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ)
     msg.set_port(port);
     msg.set_type("follower");
 
-    // TODO: begin synchronization process
     while (true) {
         // the synchronizers sync files every 5 seconds
         sleep(5);
@@ -389,28 +438,53 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ)
         id.set_id(synchID);
 
         // making a request to the coordinator to see count of follower synchronizers
-        coord_stub_->GetAllFollowerServers(&context, id, &followerServers);
-
+        coord_stub->GetAllFollowerServers(&context, id, &followerServers);
         {
-            lock_guard<mutex> lock(otherHostsMtx);
-            otherHosts.clear();
-            for (int i = 0; i < followerServers.hostname_size(); ++i) {
-                if (followerServers.serverid(i) == synchID) continue;
-                otherHosts.push_back(followerServers.hostname(i));
+            lock_guard<mutex> lock(syncsMtx);
+            otherSyncs.clear();
+            for (const auto& hostId : followerServers.serverid()) {
+                otherSyncs.push_back(hostId);
             }
-            registered_synchronizers = (int)otherHosts.size();
         }
 
-        // Publish user list
-        rabbitMQ.publishUserList();
-
-        // Publish client relations
-        rabbitMQ.publishClientRelations();
-
-        // Publish timelines
-        rabbitMQ.publishTimelines();
+        if (isMaster) {
+            rabbitMQ.publishUserList();
+            rabbitMQ.publishClientRelations();
+            rabbitMQ.publishTimelines();
+        }
     }
     return;
+}
+
+void Heartbeat(ServerInfo serverInfo) {
+    Confirmation conf;
+    {
+        ClientContext context;
+        log(INFO, "Sending registration heartbeat to coordinator");
+        grpc::Status status = coord_stub->Heartbeat(&context, serverInfo, &conf);
+    } {
+        ClientContext context;
+        ID id; id.set_id(synchID);
+        ServerInfo info;
+        coord_stub->GetFollowerServer(&context, id, &info);
+        isMaster = info.serverid() == synchID;
+    }
+
+    if (conf.status()) {
+        registered = true;
+        registeredCV.notify_all();
+    }
+
+    while (true) {
+        ClientContext context;
+        log(INFO, "Sending heartbeat to coordinator");
+        grpc::Status status = coord_stub->Heartbeat(&context, serverInfo, &conf);
+        if (conf.status()) {
+            registered = true;
+            registeredCV.notify_all();
+        }
+        sleep(5);
+    }
 }
 
 vector<string> get_lines_from_file(const string& filename) {
@@ -429,17 +503,6 @@ vector<string> get_lines_from_file(const string& filename) {
     fs.close();
 
     return lines;
-}
-
-void Heartbeat(ServerInfo serverInfo) {
-    // For the synchronizer, a single initial heartbeat RPC acts as an initialization method which
-    // servers to register the synchronizer with the coordinator and determine whether it is a master
-
-    log(INFO, "Sending initial heartbeat to coordinator");
-
-    // send a heartbeat to the coordinator, which registers your follower synchronizer as either a master or a slave
-
-    // YOUR CODE HERE
 }
 
 bool file_contains_user(const string& filename, const string& user) {
