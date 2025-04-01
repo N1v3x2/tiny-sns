@@ -9,7 +9,6 @@
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
-#include <chrono>
 #include <iomanip>
 #include <semaphore.h>
 #include <sys/stat.h>
@@ -32,8 +31,6 @@
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 #include <glog/logging.h>
-#include "sns.grpc.pb.h"
-#include "sns.pb.h"
 #include "coordinator.grpc.pb.h"
 #include "coordinator.pb.h"
 
@@ -83,10 +80,14 @@ public:
 
 int synchID = 1;
 int clusterID = 1;
+int serverID;
+
 unique_ptr<CoordService::Stub> coord_stub;
 string coordAddr;
+
 vector<int> otherSyncs;
 mutex syncsMtx, registeredMtx;
+
 condition_variable registeredCV;
 bool registered = false, isMaster = false;
 
@@ -267,9 +268,9 @@ public:
             ID id;
             ServerInfo info;
             for (const auto &follower : getFollowersOfUser(clientId)) {
-                // Determine which synchronizer is responsible for each follower
+                // TODO: Determine which synchronizer is responsible for each follower
                 ClientContext ctx;
-                int followerCluster = ((stoi(follower) - 1) % 3 ) + 1;
+                int followerCluster = ((stoi(follower) - 1) % 3) + 1;
                 id.set_id(followerCluster);
                 coord_stub->GetFollowerServer(&ctx, id, &info);
 
@@ -462,12 +463,13 @@ void Heartbeat(ServerInfo serverInfo) {
         ClientContext context;
         log(INFO, "Sending registration heartbeat to coordinator");
         grpc::Status status = coord_stub->Heartbeat(&context, serverInfo, &conf);
-    } {
+    }
+    {
         ClientContext context;
         ID id; id.set_id(synchID);
         ServerInfo info;
         coord_stub->GetFollowerServer(&context, id, &info);
-        isMaster = info.serverid() == synchID;
+        isMaster = info.ismaster();
     }
 
     if (conf.status()) {
@@ -567,5 +569,5 @@ vector<string> getFollowersOfUser(int ID) {
 }
 
 string get_dir_prefix() {
-    return "cluster_" + to_string(clusterID) + "/" + clusterSubdirectory + "/";
+    return "cluster_" + to_string(clusterID) + "/" + to_string(serverID) + "/";
 }

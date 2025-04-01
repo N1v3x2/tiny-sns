@@ -52,14 +52,13 @@ struct zNode {
 };
 
 const string SERVER = "server", SYNC = "sync";
-
-mutex routingTableMtx, followerSyncerMtx;
-
 using table = vector<vector<zNode*>>;
 table routingTable(3, vector<zNode*>()), followerSyncers(3, vector<zNode*>());
+mutex routingTableMtx, followerSyncerMtx;
 
 
 zNode* findServer(int clusterId, int serverId); 
+zNode* findMaster(int clusterId);
 std::time_t getTimeNow();
 void checkHeartbeat();
 
@@ -111,21 +110,14 @@ class CoordServiceImpl final : public CoordService::Service {
     // Return the master
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         int clientId = id->id();
+        int clusterId = (clientId - 1) % 3 + 1;
         log(INFO,
             "Received `GetServer` request from client " +
             to_string(clientId));
 
-        int clusterId = (clientId - 1) % 3 + 1;
-
         // First active server in the routing table is the master
-        zNode* server;
         lock_guard<mutex> lock(routingTableMtx);
-        for (auto& s : routingTable[clusterId - 1]) {
-            if (s->isActive()) {
-                server = s;
-                break;
-            }
-        }
+        zNode* server = findMaster(clusterId);
 
         serverinfo->set_serverid(server->serverID);
         serverinfo->set_hostname(server->hostname);
@@ -175,14 +167,25 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 
     Status GetFollowerServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
-        int clusterId = id->id();
+        int syncId = id->id();
+        bool found = false;
         lock_guard<mutex> lock(followerSyncerMtx);
-        zNode* masterSync = followerSyncers[clusterId].front();
-        serverinfo->set_serverid(masterSync->serverID);
-        serverinfo->set_hostname(masterSync->hostname);
-        serverinfo->set_port(masterSync->port);
-        serverinfo->set_clusterid(clusterId);
-        serverinfo->set_ismaster(true);
+        for (int clusterId = 1; clusterId <= 3; ++clusterId) {
+            for (int i = 0; i < (int)followerSyncers[clusterId].size(); ++i) {
+                zNode* sync = followerSyncers[clusterId][i];
+                if (sync->serverID == syncId) {
+                    zNode* server = routingTable[clusterId][i];
+                    serverinfo->set_serverid(server->serverID);
+                    serverinfo->set_hostname(server->hostname);
+                    serverinfo->set_port(server->port);
+                    serverinfo->set_clusterid(clusterId);
+                    serverinfo->set_ismaster(i == 0);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
         return Status::OK;
     }
 };
@@ -271,3 +274,9 @@ bool zNode::isActive() {
     return !missed_heartbeat || difftime(getTimeNow(), last_heartbeat) < 10;
 }
 
+zNode* findMaster(int clusterId) {
+    for (auto& s : routingTable[clusterId - 1]) {
+        if (s->isActive()) return s;
+    }
+    return nullptr;
+}

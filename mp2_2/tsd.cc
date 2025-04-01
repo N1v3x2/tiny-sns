@@ -58,6 +58,9 @@
 #include "sns.grpc.pb.h"
 #include "coordinator.grpc.pb.h"
 
+using namespace std::chrono_literals;
+using namespace std::this_thread;
+
 using csce438::ListReply;
 using csce438::Message;
 using csce438::Reply;
@@ -83,104 +86,133 @@ using std::ifstream, std::ofstream;
 using std::unique_ptr;
 using std::cout, std::endl;
 
-int server_id, cluster_id;
-string cluster_dir, server_dir, all_users_file;
-unique_ptr<CoordService::Stub> coord_stub;
+int serverId, clusterId;
+string clusterDir, serverDir, allUsersFile;
+unique_ptr<CoordService::Stub> coordStub;
 
-// NOTE: might be a good idea for each client to have their own lock to reduce contention
+// TODO: associate a file semaphore with each client
+// TODO: instead of tracking followers/following in memory, always just check the user's file
 struct Client {
-    string username;
-    map<string, Client*> followers;
-    map<string, Client*> following;
+    string username, filename, followerFile, followingFile;
+    map<string, Client*> followers, following;
+
     Client(string& uname) : username(uname) {}
+    ~Client() {
+        std::unordered_set<string> deleted;
+        for (auto& [name, c] : followers) {
+            delete c;
+            deleted.insert(name);
+        }
+        for (auto& [name, c] : following) {
+            if (deleted.count(name)) continue;
+            delete c;
+        }
+    }
+
     bool operator==(const Client& c1) const {
         return (username == c1.username);
     }
 };
 
-std::mutex client_mtx;
-sem_t* file_sem;
-map<string, Client*> client_db;
+class SemGuard {
+    sem_t* sem;
+
+    string makeName(const string& filename) {
+        string semName = filename;
+        std::replace(semName.begin(), semName.end(), '/', '_');
+        semName.insert(0, 1, '/');
+        return semName;
+    }
+
+public:
+    SemGuard(const string& name) {
+        sem = sem_open(makeName(name).c_str(), O_CREAT, 0644, 1);
+        sem_wait(sem);
+    }
+    ~SemGuard() {
+        sem_post(sem);
+        sem_close(sem);
+    }
+};
+
+std::mutex clientMtx;
+map<string, Client*> clientDB;
 
 ServerInfo GetSlaveInfo();
 unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port);
 Message MakeMessage(const string& username, const string& msg);
 
 class SNSServiceImpl final : public SNSService::Service {
-    Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
+    Status List(ServerContext* context, const Request* request, ListReply* response) override {
         string username = request->username();
         log(INFO, "Received `List` request " + username);
 
-        std::lock_guard<std::mutex> lock(client_mtx);
+        std::lock_guard<std::mutex> lock(clientMtx);
 
-        for (auto& [uname, _] : client_db)
-            list_reply->add_all_users(uname);
+        for (auto& [uname, _] : clientDB)
+            response->add_all_users(uname);
 
-        Client* client = client_db[username];
+        Client* client = clientDB[username];
         for (auto& [follower_uname, _] : client->followers)
-            list_reply->add_followers(follower_uname);
+            response->add_followers(follower_uname);
 
         log(INFO, "Sending `List` to client...");
         return Status::OK;
     }
 
-    Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+    Status Follow(ServerContext* context, const Request* request, Reply* response) override {
         string username = request->username();
         log(INFO, "Received `Follow` request from client " + username);
 
         if (request->arguments_size() < 1) {
-            reply->set_msg("Invalid command");
+            response->set_msg("Invalid command");
             return Status::OK;
         }
-        string to_follow = request->arguments(0);
+        string toFollow = request->arguments(0);
 
-        // Synchronize access to `client_db`
+        Client* client = nullptr;
         {
-            std::lock_guard<std::mutex> lock(client_mtx);
+            std::lock_guard<std::mutex> lock(clientMtx);
 
-            if (!client_db.count(to_follow)) {
-                reply->set_msg("Invalid username");
+            if (!clientDB.count(toFollow)) {
+                response->set_msg("Invalid username");
                 return Status::OK;
             }
-            Client* client = client_db[username];
-            Client* client_to_follow = client_db[to_follow];
+            client = clientDB[username];
+            Client* clientToFollow = clientDB[toFollow];
 
-            if (client->following.count(to_follow) || client == client_to_follow) {
-                reply->set_msg("Input username already exists");
+            if (client->following.count(toFollow) || *client == *clientToFollow) {
+                response->set_msg("Input username already exists");
                 return Status::OK;
             }
 
-            client->following[to_follow] = client_to_follow;
-            client_to_follow->followers[username] = client;
+            client->following[toFollow] = clientToFollow;
+            clientToFollow->followers[username] = client;
+        }
+        {
+            SemGuard lock(client->filename);
+            ofstream fs(serverDir + username + "_following.txt", std::ios::app);
+            fs << toFollow << endl;
+            fs.close();
+            fs.clear();
+
+            fs.open(serverDir + toFollow + "_followers.txt", std::ios::app);
+            fs << username << endl;
         }
 
-        // FILE CRITICAL SECTION
-        sem_wait(file_sem);
-
-        ofstream fs(server_dir + username + "_following.txt", std::ios::app);
-        fs << to_follow << endl;
-        fs.close();
-        fs.clear();
-
-        fs.open(server_dir + to_follow + "_followers.txt", std::ios::app);
-        fs << username << endl;
-
-        sem_post(file_sem);
-        // END FILE CRITICAL SECTION
-
-        ServerInfo slave_info = GetSlaveInfo();
-        bool isMaster = slave_info.serverid() != server_id;
+        ServerInfo slaveInfo = GetSlaveInfo();
+        bool isMaster = slaveInfo.serverid() != serverId;
 
         // Master: replicate new user to slave
         if (isMaster) {
-            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
-                slave_info.hostname(), slave_info.port());
+            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub(
+                slaveInfo.hostname(), slaveInfo.port());
 
-            ClientContext master_slave_ctx;
-            Request req; req.set_username(username); req.add_arguments(to_follow);
+            ClientContext masterSlaveCtx;
+            Request req; req.set_username(username); req.add_arguments(toFollow);
             Reply rep;
             log(INFO, "Master: replicating Follow state to slave");
-            slave_stub->Follow(&master_slave_ctx, req, &rep);
+            slaveStub->Follow(&masterSlaveCtx, req, &rep);
         }
 
         return Status::OK;
@@ -217,40 +249,40 @@ class SNSServiceImpl final : public SNSService::Service {
         log(INFO, "Received `Login` request from client " + username);
 
         {
-            std::lock_guard<std::mutex> lock(client_mtx);
+            std::lock_guard<std::mutex> lock(clientMtx);
 
             // Check whether the user already exists
-            if (client_db.count(username)) {
+            if (clientDB.count(username)) {
                 reply->set_msg("Username already exists");
                 return Status::OK;
             }
 
-            client_db[username] = new Client(username);
+            Client* client = new Client(username);
+            client->filename = serverDir + username + ".txt";
+            client->followerFile = serverDir + username + "_followers.txt";
+            client->followingFile = serverDir + username + "_following.txt";
+            clientDB[username] = client;
 
-            // FILE CRITICAL SECTION
-            sem_wait(file_sem);
+            SemGuard fileLock(client->filename);
 
-            ofstream fs(server_dir + username + ".txt"); fs.close();
-            fs.open(server_dir + username + "_following.txt"); fs.close();
-            fs.open(server_dir + username + "_followers.txt"); fs.close();
-
-            sem_post(file_sem);
-            // END FILE CRITICAL SECTION
+            ofstream fs(serverDir + username + ".txt"); fs.close();
+            fs.open(serverDir + username + "_following.txt"); fs.close();
+            fs.open(serverDir + username + "_followers.txt"); fs.close();
         }
 
-        ServerInfo slave_info = GetSlaveInfo();
-        bool isMaster = slave_info.serverid() != server_id;
+        ServerInfo slaveInfo = GetSlaveInfo();
+        bool isMaster = slaveInfo.serverid() != serverId;
 
         // Master: replicate to slave
         if (isMaster) {
             unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
-                slave_info.hostname(), slave_info.port());
+                slaveInfo.hostname(), slaveInfo.port());
 
-            ClientContext master_slave_ctx;
+            ClientContext masterSlaveCtx;
             Request req; req.set_username(username);
             Reply rep;
             log(INFO, "Master: replicating Login state to slave");
-            slave_stub->Login(&master_slave_ctx, req, &rep);
+            slave_stub->Login(&masterSlaveCtx, req, &rep);
         }
 
         return Status::OK;
@@ -260,14 +292,12 @@ class SNSServiceImpl final : public SNSService::Service {
                     ServerReaderWriter<Message, Message>* stream) override {
         Message msg;
         Client* client = nullptr;
-        string username, user_file;
+        string username;
 
         // Set the current user based on the first message received
         if (stream->Read(&msg)) {
             username = msg.username();
-            user_file = server_dir + username + ".txt";
-            std::lock_guard<std::mutex> lock(client_mtx);
-            client = client_db[username];
+            client = clientDB[username];
         } else {
             return Status::OK;
         }
@@ -275,37 +305,43 @@ class SNSServiceImpl final : public SNSService::Service {
         log(INFO, "Received `Timeline` request from client " + username);
 
         // Use background thread to monitor changes to the user's file
-        std::thread monitor_timeline([stream, user_file, client, username]() {
+        std::thread monitorTimeline([stream, client, username]() {
             ifstream fs;
             char fill;
-            std::tm post_time{};
-            string post_user, post_content, dummy;
-            Message timeline_msg;
+            std::tm postTime{};
+            string postUser, postContent, dummy;
+            Message timelineMsg;
 
-            time_t last_read = 0;
+            time_t lastRead = 0;
             while (true) {
-                // CRITICAL SECTION
-                sem_wait(file_sem);
-                fs.open(user_file);
+                std::this_thread::sleep_for(5s);
+
                 vector<Message> msgs;
+                {
+                    SemGuard lock(client->filename);
+                    fs.clear();
+                    fs.open(client->filename);
 
-                while (fs.peek() != ifstream::traits_type::eof()) {
-                    fs >> fill >> std::ws >> std::get_time(&post_time, "%a %b %d %H:%M:%S %Y")
-                       >> fill >> post_user
-                       >> fill >> std::ws;
-                    std::getline(fs, post_content);
-                    std::getline(fs, dummy);
+                    while (fs.peek() != ifstream::traits_type::eof()) {
+                        fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
+                           >> fill >> postUser
+                           >> fill >> std::ws;
+                        std::getline(fs, postContent);
+                        std::getline(fs, dummy);
 
-                    // Only read new posts (since last read)
-                    if (std::mktime(&post_time) <= last_read) break;
+                        // Only read new posts (since last read)
+                        if (std::mktime(&postTime) <= lastRead) break;
 
-                    Timestamp* timestamp = new Timestamp();
-                    timestamp->set_seconds(std::mktime(&post_time));
-                    timestamp->set_nanos(0);
-                    timeline_msg.set_allocated_timestamp(timestamp);
-                    timeline_msg.set_username(post_user);
-                    timeline_msg.set_msg(post_content);
-                    msgs.push_back(timeline_msg);
+                        Timestamp* timestamp = new Timestamp();
+                        timestamp->set_seconds(std::mktime(&postTime));
+                        timestamp->set_nanos(0);
+                        timelineMsg.set_allocated_timestamp(timestamp);
+                        timelineMsg.set_username(postUser);
+                        timelineMsg.set_msg(postContent);
+                        msgs.push_back(timelineMsg);
+                    }
+
+                    fs.close();
                 }
 
                 if (!msgs.empty()) {
@@ -315,34 +351,27 @@ class SNSServiceImpl final : public SNSService::Service {
                         " has unread posts; sending latest posts...");
                     for (int i = (int)msgs.size() - 1; i >= 0; --i)
                         stream->Write(msgs[i]);
-                    last_read = TimeUtil::TimestampToTimeT(msgs.back().timestamp());
+                    lastRead = TimeUtil::TimestampToTimeT(msgs.back().timestamp());
                 }
-
-                fs.close();
-                fs.clear();
-                sem_post(file_sem);
-                // END CRITICAL SECTION
-
-                sleep(5);
             }
         });
 
         // Slave replication
-        ServerInfo slave_info = GetSlaveInfo();
-        bool isMaster = slave_info.serverid() != server_id;
+        ServerInfo slaveInfo = GetSlaveInfo();
+        bool isMaster = slaveInfo.serverid() != serverId;
 
-        std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slave_stream;
-        ClientContext master_slave_ctx;
+        std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
+        ClientContext masterSlaveCtx;
 
         if (isMaster) {
-            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
-                slave_info.hostname(), slave_info.port());
-            slave_stream = slave_stub->Timeline(&master_slave_ctx);
+            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub(
+                slaveInfo.hostname(), slaveInfo.port());
+            slaveStream = slaveStub->Timeline(&masterSlaveCtx);
 
             // Establish timeline connection to slave
             log(INFO, "Master: establishing timeline connection to slave");
-            string conn_msg = "Timeline";
-            slave_stream->Write(MakeMessage(username, conn_msg));
+            string connMsg = "Timeline";
+            slaveStream->Write(MakeMessage(username, connMsg));
         }
 
         ofstream fs;
@@ -350,53 +379,47 @@ class SNSServiceImpl final : public SNSService::Service {
             // Write posts to all followers
             log(INFO, "User " + client->username + " just posted; sending post to followers...");
 
-            std::lock_guard<std::mutex> lock(client_mtx);
+            std::lock_guard<std::mutex> lock(clientMtx);
 
-            for (auto& [follower_uname, follower] : client->followers) {
-                string follower_file = server_dir + follower_uname + ".txt";
-
-                // CRITICAL SECTION
-                sem_wait(file_sem);
-
-                time_t curr_time = time(nullptr);
-                std::tm* t = gmtime(&curr_time);
-                fs.open(follower_file, std::ios::app);
-                fs << "T " << asctime(t)
-                   << "U " << username << '\n'
-                   << "W " << msg.msg() << '\n';
-
-                fs.close();
-                fs.clear();
-
-                sem_post(file_sem);
-                // END CRITICAL SECTION
+            for (auto& [followerUname, follower] : client->followers) {
+                {
+                    SemGuard fileLock(follower->filename);
+                    time_t curr_time = time(nullptr);
+                    std::tm* t = gmtime(&curr_time);
+                    fs.clear();
+                    fs.open(follower->filename, std::ios::app);
+                    fs << "T " << asctime(t)
+                       << "U " << username << '\n'
+                       << "W " << msg.msg() << '\n';
+                    fs.close();
+                }
 
                 // Master: replicate to slave
                 if (isMaster) {
                     log(INFO, "Master: replicating timeline post to slave");
-                    slave_stream->Write(msg);
+                    slaveStream->Write(msg);
                 }
             }
         }
 
-        monitor_timeline.join();
+        monitorTimeline.join();
 
         return Status::OK;
     }
 };
 
 ServerInfo GetSlaveInfo() {
-    ClientContext master_slave_ctx;
-    ID id; id.set_id(cluster_id);
-    ServerInfo slave_info;
-    coord_stub->GetSlave(&master_slave_ctx, id, &slave_info);
-    return slave_info;
+    ClientContext masterSlaveCtx;
+    ID id; id.set_id(clusterId);
+    ServerInfo slaveInfo;
+    coordStub->GetSlave(&masterSlaveCtx, id, &slaveInfo);
+    return slaveInfo;
 }
 
 unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port) {
-    string slave_addr = hostname + ":" + port;
+    string slaveAddr = hostname + ":" + port;
     return SNSService::NewStub(
-        grpc::CreateChannel(slave_addr, grpc::InsecureChannelCredentials()));
+        grpc::CreateChannel(slaveAddr, grpc::InsecureChannelCredentials()));
 }
 
 Message MakeMessage(const string& username, const string& msg) {
@@ -412,19 +435,19 @@ Message MakeMessage(const string& username, const string& msg) {
 
 // Background heartbeat thread function
 void Heartbeat(
-    string coord_ip,
-    string coord_port,
-    string port_no)
+    string coordIP,
+    string coordPort,
+    string portNo)
 {
     const string hostname = "0.0.0.0";
-    string coord_address = coord_ip + ":" + coord_port;
+    string coord_address = coordIP + ":" + coordPort;
 
     ServerInfo info;
-    info.set_serverid(server_id);
+    info.set_serverid(serverId);
     info.set_hostname(hostname);
-    info.set_port(port_no);
+    info.set_port(portNo);
     info.set_type("server");
-    info.set_clusterid(cluster_id);
+    info.set_clusterid(clusterId);
 
     Confirmation confirmation;
 
@@ -433,7 +456,7 @@ void Heartbeat(
         ClientContext context;
 
         log(INFO, "Sending heartbeat to coordinator");
-        grpc::Status status = coord_stub->Heartbeat(&context, info, &confirmation);
+        grpc::Status status = coordStub->Heartbeat(&context, info, &confirmation);
         if (!status.ok() || !confirmation.status()) {
             log(ERROR, "Heartbeat did not receive reply from coordinator");
             std::terminate();
@@ -449,81 +472,83 @@ void UpdateClientDB() {
     string username, follower, following;
 
     while (true) {
-        sleep(5);
+        std::this_thread::sleep_for(3s);
 
-        std::lock_guard<std::mutex> lock(client_mtx);
-
-        // FILE CRITICAL SECTION
-        sem_wait(file_sem);
-
-        fs.open(all_users_file);
-        while (fs.peek() != ifstream::traits_type::eof()) {
-            getline(fs, username);
-            if (!client_db.count(username))
-                client_db[username] = new Client(username);
-        }
-        fs.close();
-        fs.clear();
-
-        // Update follower & following information
-        for (auto& [uname, user] : client_db) {
-            fs.open(server_dir + uname + "_following.txt");
+        std::lock_guard<std::mutex> lock(clientMtx);
+        {
+            SemGuard fileLock(allUsersFile);
+            fs.clear();
+            fs.open(allUsersFile);
             while (fs.peek() != ifstream::traits_type::eof()) {
-                getline(fs, following);
-                if (!user->following.count(following))
-                    user->following[following] = client_db[following];
+                getline(fs, username);
+                if (!clientDB.count(username))
+                    clientDB[username] = new Client(username);
             }
             fs.close();
-            fs.clear();
-
-            fs.open(server_dir + uname + "_followers.txt");
-            while (fs.peek() != ifstream::traits_type::eof()) {
-                getline(fs, follower);
-                if (!user->followers.count(follower))
-                    user->followers[follower] = client_db[follower];
-            }
         }
 
-        sem_post(file_sem);
-        // END FILE CRITICAL SECTION
+        // Update follower & following information
+        for (auto& [uname, user] : clientDB) {
+            {
+                SemGuard fileLock(user->followerFile);
+                fs.clear();
+                fs.open(user->followingFile);
+                while (fs.peek() != ifstream::traits_type::eof()) {
+                    getline(fs, following);
+                    if (!user->following.count(following))
+                        user->following[following] = clientDB[following];
+                }
+                fs.close();
+            }
+            {
+                SemGuard fileLock(user->followerFile);
+                fs.clear();
+                fs.open(user->followerFile);
+                while (fs.peek() != ifstream::traits_type::eof()) {
+                    getline(fs, follower);
+                    if (!user->followers.count(follower))
+                        user->followers[follower] = clientDB[follower];
+                }
+            }
+        }
     }
 }
 
 void RunServer(
-    string coord_ip,
-    string coord_port,
-    string port_no)
+    string coordIP,
+    string coordPort,
+    string portNo)
 {
     const string hostname = "0.0.0.0";
-    string server_address = hostname + ":" + port_no;
+    string serverAddr = hostname + ":" + portNo;
     SNSServiceImpl service;
 
     ServerBuilder builder;
-    builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+    builder.AddListeningPort(serverAddr, grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
     unique_ptr<Server> server(builder.BuildAndStart());
-    cout << "Server listening on " << server_address << std::endl;
-    log(INFO, "Server listening on " + server_address);
+    cout << "Server listening on " << serverAddr << std::endl;
+    log(INFO, "Server listening on " + serverAddr);
 
     // Establish connection to coordinator
-    string coord_address = coord_ip + ":" + coord_port;
-    coord_stub = CoordService::NewStub(
-        grpc::CreateChannel(coord_address, grpc::InsecureChannelCredentials()));
+    string coordAddr = coordIP + ":" + coordPort;
+    coordStub = CoordService::NewStub(
+        grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
     // Backtrack thread to update `client_db`
-    std::thread update_client_db(UpdateClientDB);
+    std::thread updateClientDB(UpdateClientDB);
 
     // Create background thread to send heartbeats to coordinator
-    std::thread heartbeat(Heartbeat, coord_ip, coord_port, port_no);
+    std::thread heartbeat(Heartbeat, coordIP, coordPort, portNo);
 
     server->Wait();
 
-    update_client_db.join();
+    updateClientDB.join();
     heartbeat.join();
 }
 
 int main(int argc, char** argv) {
-    string coord_ip, coord_port;
+    string coordIP, coordPort;
     string port;
 
     if (argc < 6) {
@@ -536,16 +561,16 @@ int main(int argc, char** argv) {
     while ((opt = getopt(argc, argv, "c:s:h:k:p:")) != -1) {
         switch (opt) {
             case 'c':
-                cluster_id = atoi(optarg);
+                clusterId = atoi(optarg);
                 break;
             case 's':
-                server_id = atoi(optarg);
+                serverId = atoi(optarg);
                 break;
             case 'h':
-                coord_ip = optarg;
+                coordIP = optarg;
                 break;
             case 'k':
-                coord_port = optarg;
+                coordPort = optarg;
                 break;
             case 'p':
                 port = optarg;
@@ -555,31 +580,20 @@ int main(int argc, char** argv) {
         }
     }
 
-    string log_file_name = string("server-") + port;
-    google::InitGoogleLogging(log_file_name.c_str());
+    string logFilename = string("server-") + port;
+    google::InitGoogleLogging(logFilename.c_str());
     log(INFO, "Logging initialized");
 
-    // Initialize file semaphore
-    const string sem_name = "/" + to_string(cluster_id) + "_" +
-        to_string(server_id) + "_users_sem";
-    file_sem = sem_open(sem_name.c_str(), O_CREAT, 0644, 1);
+    clusterDir = "cluster_" + to_string(clusterId) + "/";
+    serverDir = clusterDir + to_string(serverId) + "/";
+    allUsersFile = serverDir + "all_users.txt";
+    {
+        SemGuard lock(allUsersFile);
+        mkdir(clusterDir.data(), 0777);
+        mkdir(serverDir.data(), 0777);
+        ofstream fs(allUsersFile); fs.close();
+    }
 
-    cluster_dir = "cluster_" + to_string(cluster_id) + "/";
-    server_dir = cluster_dir + to_string(server_id) + "/";
-
-    // FILE CRITICAL SECTION
-    sem_wait(file_sem);
-
-    mkdir(cluster_dir.data(), 0777);
-    mkdir(server_dir.data(), 0777);
-    all_users_file = server_dir + "all_users.txt";
-    ofstream fs(all_users_file); fs.close();
-
-    sem_post(file_sem);
-    // FILE CRITICAL SECTION
-
-    RunServer(coord_ip, coord_port, port);
-
-    sem_close(file_sem);
+    RunServer(coordIP, coordPort, port);
     return 0;
 }
