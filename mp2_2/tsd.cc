@@ -1,36 +1,3 @@
-/*
- *
- * Copyright 2015, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
 #include <glog/logging.h>
 #include <google/protobuf/duration.pb.h>
 #include <google/protobuf/timestamp.pb.h>
@@ -83,16 +50,21 @@ using std::string;
 using std::to_string;
 using std::vector;
 using std::map;
-using std::ifstream, std::ofstream;
+using std::ifstream;
+using std::ofstream;
 using std::unique_ptr;
-using std::cout, std::endl;
+using std::cout;
+using std::endl;
 
 int serverId, clusterId;
 string clusterDir, serverDir, allUsersFile;
 unique_ptr<CoordService::Stub> coordStub;
 
 struct Client {
-    string username, filename, followerFile, followingFile;
+    string username;
+    string filename;
+    string followerFile;
+    string followingFile;
     map<string, Client*> followers, following;
     Client(const string& uname) : username(uname) {}
     bool operator==(const Client& c1) const {
@@ -176,12 +148,13 @@ class SNSServiceImpl final : public SNSService::Service {
             clientToFollow->followers[username] = client;
         }
         {
-            SemGuard lock(client->filename);
+            SemGuard followingLock(client->followingFile);
             ofstream fs(serverDir + username + "_following.txt", std::ios::app);
             fs << toFollow << endl;
             fs.close();
-            fs.clear();
 
+            SemGuard followerLock(client->followerFile);
+            fs.clear();
             fs.open(serverDir + toFollow + "_followers.txt", std::ios::app);
             fs << username << endl;
         }
@@ -248,8 +221,6 @@ class SNSServiceImpl final : public SNSService::Service {
             client->followerFile = serverDir + username + "_followers.txt";
             client->followingFile = serverDir + username + "_following.txt";
             clientDB[username] = client;
-
-            SemGuard fileLock(client->filename);
 
             ofstream fs(serverDir + username + ".txt"); fs.close();
             fs.open(serverDir + username + "_following.txt"); fs.close();
@@ -342,19 +313,17 @@ class SNSServiceImpl final : public SNSService::Service {
             }
         });
 
-        // Slave replication
         ServerInfo slaveInfo = GetSlaveInfo();
         bool isMaster = slaveInfo.serverid() != serverId;
 
         std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
         ClientContext masterSlaveCtx;
 
+        // (Master) Set up slave replication
         if (isMaster) {
             unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub(
                 slaveInfo.hostname(), slaveInfo.port());
             slaveStream = slaveStub->Timeline(&masterSlaveCtx);
-
-            // Establish timeline connection to slave
             log(INFO, "Master: establishing timeline connection to slave");
             string connMsg = "Timeline";
             slaveStream->Write(MakeMessage(username, connMsg));
@@ -366,7 +335,6 @@ class SNSServiceImpl final : public SNSService::Service {
             log(INFO, "User " + client->username + " just posted; sending post to followers...");
 
             std::lock_guard<std::mutex> lock(clientMtx);
-
             for (auto& [followerUname, follower] : client->followers) {
                 {
                     SemGuard fileLock(follower->filename);
@@ -440,7 +408,6 @@ void Heartbeat(
     // Send heartbeat every 5 seconds
     while (true) {
         ClientContext context;
-
         log(INFO, "Sending heartbeat to coordinator");
         grpc::Status status = coordStub->Heartbeat(&context, info, &confirmation);
         if (!status.ok() || !confirmation.status()) {
@@ -448,8 +415,7 @@ void Heartbeat(
             std::terminate();
         }
         log(INFO, "Received heartbeat confirmation from coordinator");
-
-        sleep(5);
+        sleep_for(5s);
     }
 }
 
@@ -458,7 +424,7 @@ void UpdateClientDB() {
     string username, follower, following;
 
     while (true) {
-        std::this_thread::sleep_for(3s);
+        sleep_for(3s);
 
         std::lock_guard<std::mutex> lock(clientMtx);
         {
@@ -521,12 +487,8 @@ void RunServer(
     coordStub = CoordService::NewStub(
         grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
-    // Backtrack thread to update `client_db`
     std::thread updateClientDB(UpdateClientDB);
-
-    // Create background thread to send heartbeats to coordinator
     std::thread heartbeat(Heartbeat, coordIP, coordPort, portNo);
-
     server->Wait();
 
     updateClientDB.join();

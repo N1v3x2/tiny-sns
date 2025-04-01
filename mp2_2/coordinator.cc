@@ -7,7 +7,6 @@
 #include <chrono>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <utility>
 #include <vector>
 #include <iostream>
 #include <memory>
@@ -36,8 +35,10 @@ using csce438::ServerList;
 using csce438::Confirmation;
 using csce438::ID;
 using std::vector;
-using std::string, std::to_string;
-using std::cout, std::endl;
+using std::string;
+using std::to_string;
+using std::cout;
+using std::endl;
 using std::mutex;
 using std::lock_guard;
 
@@ -46,8 +47,11 @@ struct zNode {
     string hostname;
     string port;
     string type;
-    std::time_t last_heartbeat;
+    time_t last_heartbeat;
     bool missed_heartbeat;
+    zNode(int s, string h, string p, string t, time_t l, bool m) :
+        serverID(s), hostname(h), port(p), type(t), last_heartbeat(l), missed_heartbeat(m)
+    {}
     bool isActive();
 };
 
@@ -75,13 +79,13 @@ class CoordServiceImpl final : public CoordService::Service {
 
         if (!server) { 
             // Register server after its first heartbeat
-            zNode* newserver = new zNode();
-            newserver->serverID = serverId;
-            newserver->hostname = request->hostname();
-            newserver->port = request->port();
-            newserver->type = request->type();
-            newserver->last_heartbeat = getTimeNow();
-            newserver->missed_heartbeat = false;
+            zNode* newserver = new zNode(
+                serverId,
+                request->hostname(),
+                request->port(),
+                request->type(),
+                getTimeNow(),
+                false);
 
             if (newserver->type == SERVER) {
                 lock_guard<mutex> lock(routingTableMtx);
@@ -116,7 +120,6 @@ class CoordServiceImpl final : public CoordService::Service {
         // First active server in the routing table is the master
         lock_guard<mutex> lock(routingTableMtx);
         zNode* server = findMaster(clusterId);
-
         reply->set_serverid(server->serverID);
         reply->set_hostname(server->hostname);
         reply->set_port(server->port);
@@ -134,7 +137,6 @@ class CoordServiceImpl final : public CoordService::Service {
 
         lock_guard<mutex> lock(routingTableMtx);
         zNode* slave = routingTable[cluster_id - 1].back();
-
         reply->set_serverid(slave->serverID);
         reply->set_hostname(slave->hostname);
         reply->set_port(slave->port);
