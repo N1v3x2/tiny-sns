@@ -60,6 +60,9 @@ PROTOBUF_CONSTEXPR ServerList::ServerList(
   , /*decltype(_impl_.hostname_)*/{}
   , /*decltype(_impl_.port_)*/{}
   , /*decltype(_impl_.type_)*/{}
+  , /*decltype(_impl_.clusterid_)*/ {}
+  ,/* _impl_._clusterid_cached_byte_size_ = */ { 0 }
+
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct ServerListDefaultTypeInternal {
   PROTOBUF_CONSTEXPR ServerListDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
@@ -137,6 +140,7 @@ const ::uint32_t TableStruct_coordinator_2eproto::offsets[] PROTOBUF_SECTION_VAR
     PROTOBUF_FIELD_OFFSET(::csce438::ServerList, _impl_.hostname_),
     PROTOBUF_FIELD_OFFSET(::csce438::ServerList, _impl_.port_),
     PROTOBUF_FIELD_OFFSET(::csce438::ServerList, _impl_.type_),
+    PROTOBUF_FIELD_OFFSET(::csce438::ServerList, _impl_.clusterid_),
     ~0u,  // no _has_bits_
     PROTOBUF_FIELD_OFFSET(::csce438::Confirmation, _internal_metadata_),
     ~0u,  // no _extensions_
@@ -161,8 +165,8 @@ static const ::_pbi::MigrationSchema
     schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
         { 0, -1, -1, sizeof(::csce438::ServerInfo)},
         { 14, -1, -1, sizeof(::csce438::ServerList)},
-        { 26, -1, -1, sizeof(::csce438::Confirmation)},
-        { 35, -1, -1, sizeof(::csce438::ID)},
+        { 27, -1, -1, sizeof(::csce438::Confirmation)},
+        { 36, -1, -1, sizeof(::csce438::ID)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -176,18 +180,20 @@ const char descriptor_table_protodef_coordinator_2eproto[] PROTOBUF_SECTION_VARI
     "tobuf/timestamp.proto\"q\n\nServerInfo\022\020\n\010s"
     "erverID\030\001 \001(\005\022\020\n\010hostname\030\002 \001(\t\022\014\n\004port\030"
     "\003 \001(\t\022\014\n\004type\030\004 \001(\t\022\021\n\tclusterID\030\005 \001(\005\022\020"
-    "\n\010isMaster\030\006 \001(\010\"L\n\nServerList\022\020\n\010server"
+    "\n\010isMaster\030\006 \001(\010\"_\n\nServerList\022\020\n\010server"
     "ID\030\001 \003(\005\022\020\n\010hostname\030\002 \003(\t\022\014\n\004port\030\003 \003(\t"
-    "\022\014\n\004type\030\004 \003(\t\"\036\n\014Confirmation\022\016\n\006status"
-    "\030\001 \001(\010\"\020\n\002ID\022\n\n\002id\030\001 \001(\0052\240\002\n\014CoordServic"
-    "e\0229\n\tHeartbeat\022\023.csce438.ServerInfo\032\025.cs"
-    "ce438.Confirmation\"\000\022/\n\tGetServer\022\013.csce"
-    "438.ID\032\023.csce438.ServerInfo\"\000\022.\n\010GetSlav"
-    "e\022\013.csce438.ID\032\023.csce438.ServerInfo\"\000\022;\n"
-    "\025GetAllFollowerServers\022\013.csce438.ID\032\023.cs"
-    "ce438.ServerList\"\000\0227\n\021GetFollowerServer\022"
-    "\013.csce438.ID\032\023.csce438.ServerInfo\"\000b\006pro"
-    "to3"
+    "\022\014\n\004type\030\004 \003(\t\022\021\n\tclusterID\030\005 \003(\005\"\036\n\014Con"
+    "firmation\022\016\n\006status\030\001 \001(\010\"\020\n\002ID\022\n\n\002id\030\001 "
+    "\001(\0052\341\002\n\014CoordService\0229\n\tHeartbeat\022\023.csce"
+    "438.ServerInfo\032\025.csce438.Confirmation\"\000\022"
+    "/\n\tGetServer\022\013.csce438.ID\032\023.csce438.Serv"
+    "erInfo\"\000\022.\n\010GetSlave\022\013.csce438.ID\032\023.csce"
+    "438.ServerInfo\"\000\022;\n\025GetAllFollowerServer"
+    "s\022\013.csce438.ID\032\023.csce438.ServerList\"\000\0227\n"
+    "\021GetFollowerServer\022\013.csce438.ID\032\023.csce43"
+    "8.ServerInfo\"\000\022\?\n\031GetClusterFollowerServ"
+    "ers\022\013.csce438.ID\032\023.csce438.ServerList\"\000b"
+    "\006proto3"
 };
 static const ::_pbi::DescriptorTable* const descriptor_table_coordinator_2eproto_deps[1] =
     {
@@ -197,7 +203,7 @@ static ::absl::once_flag descriptor_table_coordinator_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_coordinator_2eproto = {
     false,
     false,
-    603,
+    687,
     descriptor_table_protodef_coordinator_2eproto,
     "coordinator.proto",
     &descriptor_table_coordinator_2eproto_once,
@@ -639,6 +645,9 @@ ServerList::ServerList(const ServerList& from)
     , decltype(_impl_.hostname_){from._impl_.hostname_}
     , decltype(_impl_.port_){from._impl_.port_}
     , decltype(_impl_.type_){from._impl_.type_}
+    , decltype(_impl_.clusterid_) { from._impl_.clusterid_ }
+    ,/* _impl_._clusterid_cached_byte_size_ = */ { 0 }
+
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -654,6 +663,9 @@ inline void ServerList::SharedCtor(::_pb::Arena* arena) {
     , decltype(_impl_.hostname_){arena}
     , decltype(_impl_.port_){arena}
     , decltype(_impl_.type_){arena}
+    , decltype(_impl_.clusterid_) { arena }
+    ,/* _impl_._clusterid_cached_byte_size_ = */ { 0 }
+
     , /*decltype(_impl_._cached_size_)*/{}
   };
 }
@@ -673,6 +685,7 @@ inline void ServerList::SharedDtor() {
   _internal_mutable_hostname()->~RepeatedPtrField();
   _internal_mutable_port()->~RepeatedPtrField();
   _internal_mutable_type()->~RepeatedPtrField();
+  _impl_.clusterid_.~RepeatedField();
 }
 
 void ServerList::SetCachedSize(int size) const {
@@ -689,6 +702,7 @@ void ServerList::Clear() {
   _internal_mutable_hostname()->Clear();
   _internal_mutable_port()->Clear();
   _internal_mutable_type()->Clear();
+  _internal_mutable_clusterid()->Clear();
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -758,6 +772,18 @@ const char* ServerList::_InternalParse(const char* ptr, ::_pbi::ParseContext* ct
           goto handle_unusual;
         }
         continue;
+      // repeated int32 clusterID = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<::uint8_t>(tag) == 42)) {
+          ptr = ::PROTOBUF_NAMESPACE_ID::internal::PackedInt32Parser(_internal_mutable_clusterid(), ptr, ctx);
+          CHK_(ptr);
+        } else if (static_cast<::uint8_t>(tag) == 40) {
+          _internal_add_clusterid(::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr));
+          CHK_(ptr);
+        } else {
+          goto handle_unusual;
+        }
+        continue;
       default:
         goto handle_unusual;
     }  // switch
@@ -820,6 +846,15 @@ failure:
     target = stream->WriteString(4, s, target);
   }
 
+  // repeated int32 clusterID = 5;
+  {
+    int byte_size = _impl_._clusterid_cached_byte_size_.Get();
+    if (byte_size > 0) {
+      target = stream->WriteInt32Packed(5, _internal_clusterid(),
+                                                 byte_size, target);
+    }
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -871,6 +906,20 @@ failure:
         _internal_type().Get(i));
   }
 
+  // repeated int32 clusterID = 5;
+  {
+    std::size_t data_size = ::_pbi::WireFormatLite::Int32Size(
+        this->_internal_clusterid())
+    ;
+    _impl_._clusterid_cached_byte_size_.Set(::_pbi::ToCachedSize(data_size));
+    std::size_t tag_size = data_size == 0
+        ? 0
+        : 1 + ::_pbi::WireFormatLite::Int32Size(
+                            static_cast<int32_t>(data_size))
+    ;
+    total_size += tag_size + data_size;
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -893,6 +942,7 @@ void ServerList::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PRO
   _this->_internal_mutable_hostname()->MergeFrom(from._internal_hostname());
   _this->_internal_mutable_port()->MergeFrom(from._internal_port());
   _this->_internal_mutable_type()->MergeFrom(from._internal_type());
+  _this->_impl_.clusterid_.MergeFrom(from._impl_.clusterid_);
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -917,6 +967,7 @@ void ServerList::InternalSwap(ServerList* other) {
       other->_internal_mutable_port());
   _internal_mutable_type()->InternalSwap(
       other->_internal_mutable_type());
+  _impl_.clusterid_.InternalSwap(&other->_impl_.clusterid_);
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata ServerList::GetMetadata() const {

@@ -37,6 +37,7 @@
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 
+#include <sys/fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -90,25 +91,10 @@ int serverId, clusterId;
 string clusterDir, serverDir, allUsersFile;
 unique_ptr<CoordService::Stub> coordStub;
 
-// TODO: associate a file semaphore with each client
-// TODO: instead of tracking followers/following in memory, always just check the user's file
 struct Client {
     string username, filename, followerFile, followingFile;
     map<string, Client*> followers, following;
-
-    Client(string& uname) : username(uname) {}
-    ~Client() {
-        std::unordered_set<string> deleted;
-        for (auto& [name, c] : followers) {
-            delete c;
-            deleted.insert(name);
-        }
-        for (auto& [name, c] : following) {
-            if (deleted.count(name)) continue;
-            delete c;
-        }
-    }
-
+    Client(const string& uname) : username(uname) {}
     bool operator==(const Client& c1) const {
         return (username == c1.username);
     }

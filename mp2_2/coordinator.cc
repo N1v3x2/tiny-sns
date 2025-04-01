@@ -56,18 +56,16 @@ using table = vector<vector<zNode*>>;
 table routingTable(3, vector<zNode*>()), followerSyncers(3, vector<zNode*>());
 mutex routingTableMtx, followerSyncerMtx;
 
-
 zNode* findServer(int clusterId, int serverId); 
 zNode* findMaster(int clusterId);
 std::time_t getTimeNow();
 void checkHeartbeat();
 
-
 class CoordServiceImpl final : public CoordService::Service {
 
-    Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
-        int serverId = serverinfo->serverid();
-        int clusterId = serverinfo->clusterid();
+    Status Heartbeat(ServerContext* context, const ServerInfo* request, Confirmation* reply) override {
+        int serverId = request->serverid();
+        int clusterId = request->clusterid();
 
         log(INFO,
             "Received heartbeat from server " +
@@ -79,9 +77,9 @@ class CoordServiceImpl final : public CoordService::Service {
             // Register server after its first heartbeat
             zNode* newserver = new zNode();
             newserver->serverID = serverId;
-            newserver->hostname = serverinfo->hostname();
-            newserver->port = serverinfo->port();
-            newserver->type = serverinfo->type();
+            newserver->hostname = request->hostname();
+            newserver->port = request->port();
+            newserver->type = request->type();
             newserver->last_heartbeat = getTimeNow();
             newserver->missed_heartbeat = false;
 
@@ -93,7 +91,7 @@ class CoordServiceImpl final : public CoordService::Service {
                 followerSyncers[clusterId - 1].push_back(newserver);
             } else {
                 log(WARNING, "Unknown server type attempted registration");
-                confirmation->set_status(false);
+                reply->set_status(false);
                 return Status::OK;
             }
         } else {
@@ -102,14 +100,14 @@ class CoordServiceImpl final : public CoordService::Service {
             server->missed_heartbeat = false;
         }
 
-        confirmation->set_status(true);
+        reply->set_status(true);
         log(INFO, "Sending heartbeat confirmation to server " + to_string(serverId) + " at cluster " + to_string(clusterId));
         return Status::OK;
     }
 
     // Return the master
-    Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
-        int clientId = id->id();
+    Status GetServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
+        int clientId = request->id();
         int clusterId = (clientId - 1) % 3 + 1;
         log(INFO,
             "Received `GetServer` request from client " +
@@ -119,72 +117,70 @@ class CoordServiceImpl final : public CoordService::Service {
         lock_guard<mutex> lock(routingTableMtx);
         zNode* server = findMaster(clusterId);
 
-        serverinfo->set_serverid(server->serverID);
-        serverinfo->set_hostname(server->hostname);
-        serverinfo->set_port(server->port);
-        serverinfo->set_type(server->type);
-        serverinfo->set_clusterid(clusterId);
-        serverinfo->set_ismaster(true);
+        reply->set_serverid(server->serverID);
+        reply->set_hostname(server->hostname);
+        reply->set_port(server->port);
+        reply->set_type(server->type);
+        reply->set_clusterid(clusterId);
+        reply->set_ismaster(true);
 
         log(INFO, "Sending `ServerInfo` for `GetServer` request");
         return Status::OK;
     }
 
-    Status GetSlave(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
-        int cluster_id = id->id();
+    Status GetSlave(ServerContext* context, const ID* request, ServerInfo* reply) override {
+        int cluster_id = request->id();
         log(INFO, "Received `GetSlave` request for clutser " + to_string(cluster_id));
 
         lock_guard<mutex> lock(routingTableMtx);
         zNode* slave = routingTable[cluster_id - 1].back();
 
-        serverinfo->set_serverid(slave->serverID);
-        serverinfo->set_hostname(slave->hostname);
-        serverinfo->set_port(slave->port);
-        serverinfo->set_type(slave->type);
-        serverinfo->set_clusterid(cluster_id);
-        serverinfo->set_ismaster(false);
+        reply->set_serverid(slave->serverID);
+        reply->set_hostname(slave->hostname);
+        reply->set_port(slave->port);
+        reply->set_type(slave->type);
+        reply->set_clusterid(cluster_id);
+        reply->set_ismaster(false);
 
         log(INFO, "Sending `ServerInfo` from `GetSlave` request");
         return Status::OK;
     }
 
-    Status GetAllFollowerServers(ServerContext* context, const ID* id, ServerList* serverlist) override {
+    Status GetAllFollowerServers(ServerContext* context, const ID* id, ServerList* reply) override {
         int syncId = id->id();
         log(INFO, "Received `GetAllFollowerServers` request from synchronizer " +
             to_string(syncId));
         lock_guard<mutex> lock(followerSyncerMtx);
-        for (auto& cluster : followerSyncers) {
-            for (auto& syncer : cluster) {
+        for (int clusterID = 1; clusterID <= 3; ++clusterID) {
+            for (auto& syncer : followerSyncers[clusterID - 1]) {
                 if (syncer->serverID == syncId) continue;
-                serverlist->add_serverid(syncer->serverID);
-                serverlist->add_hostname(syncer->hostname);
-                serverlist->add_port(syncer->port);
-                serverlist->add_type(syncer->type);
+                reply->add_serverid(syncer->serverID);
+                reply->add_hostname(syncer->hostname);
+                reply->add_port(syncer->port);
+                reply->add_type(syncer->type);
+                reply->add_clusterid(clusterID);
             }
         }
         log(INFO, "Sending `ServerList` from `GetAllFollowerServers` request");
         return Status::OK;
     }
 
-    Status GetFollowerServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
-        int syncId = id->id();
-        bool found = false;
+    Status GetFollowerServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
+        int syncId = request->id();
         lock_guard<mutex> lock(followerSyncerMtx);
         for (int clusterId = 1; clusterId <= 3; ++clusterId) {
             for (int i = 0; i < (int)followerSyncers[clusterId].size(); ++i) {
                 zNode* sync = followerSyncers[clusterId][i];
                 if (sync->serverID == syncId) {
                     zNode* server = routingTable[clusterId][i];
-                    serverinfo->set_serverid(server->serverID);
-                    serverinfo->set_hostname(server->hostname);
-                    serverinfo->set_port(server->port);
-                    serverinfo->set_clusterid(clusterId);
-                    serverinfo->set_ismaster(i == 0);
-                    found = true;
-                    break;
+                    reply->set_serverid(server->serverID);
+                    reply->set_hostname(server->hostname);
+                    reply->set_port(server->port);
+                    reply->set_clusterid(clusterId);
+                    reply->set_ismaster(i == 0);
+                    return Status::OK;
                 }
             }
-            if (found) break;
         }
         return Status::OK;
     }

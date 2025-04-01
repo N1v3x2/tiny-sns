@@ -13,7 +13,6 @@
 #include <semaphore.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unordered_map>
 #include <vector>
 #include <fcntl.h>
 #include <fstream>
@@ -42,6 +41,9 @@
     LOG(severity) << msg;  \
     google::FlushLogFiles(google::severity);
 
+using namespace std::chrono_literals;
+using namespace std::this_thread;
+
 using csce438::Confirmation;
 using csce438::CoordService;
 using csce438::ID;
@@ -51,7 +53,6 @@ using grpc::ClientContext;
 using std::ifstream, std::ofstream;
 using std::string, std::to_string;
 using std::vector;
-using std::unordered_map;
 using std::unique_ptr;
 using std::stoi;
 using std::mutex, std::lock_guard;
@@ -78,6 +79,16 @@ public:
     }
 };
 
+struct Host {
+    int serverId;
+    string hostname;
+    string port;
+    int clusterId;
+    Host(int s, string h, string p, int c) :
+        serverId(s), hostname(h), port(p), clusterId(c)
+    {}
+};
+
 int synchID = 1;
 int clusterID = 1;
 int serverID;
@@ -85,8 +96,8 @@ int serverID;
 unique_ptr<CoordService::Stub> coord_stub;
 string coordAddr;
 
-vector<int> otherSyncs;
-mutex syncsMtx, registeredMtx;
+vector<Host> otherHosts;
+mutex hostsMtx, registeredMtx;
 
 condition_variable registeredCV;
 bool registered = false, isMaster = false;
@@ -177,10 +188,9 @@ public:
     void consumeUserLists() {
         vector<string> allUsers;
 
-        lock_guard<mutex> lock(syncsMtx);
-
-        for (int i = 1; i <= (int)otherSyncs.size(); i++) {
-            string queueName = "synch" + to_string(i) + "_users_queue";
+        lock_guard<mutex> lock(hostsMtx);
+        for (size_t i = 0; i < otherHosts.size(); i++) {
+            string queueName = "synch" + to_string(otherHosts[i].serverId) + "_users_queue";
             string message = consumeMessage(queueName, 1000); // 1 second timeout
             if (!message.empty()) {
                 Json::Value root;
@@ -219,10 +229,9 @@ public:
     void consumeClientRelations() {
         vector<string> allUsers = get_all_users();
 
-        lock_guard<mutex> lock(syncsMtx);
-
-        for (int i = 1; i <= (int)otherSyncs.size(); i++) {
-            string queueName = "synch" + to_string(i) + "_clients_relations_queue";
+        lock_guard<mutex> lock(hostsMtx);
+        for (int i = 1; i <= (int)otherHosts.size(); i++) {
+            string queueName = "synch" + to_string(otherHosts[i].serverId) + "_clients_relations_queue";
             string message = consumeMessage(queueName, 1000); // 1 second timeout
 
             if (!message.empty()) {
@@ -255,7 +264,7 @@ public:
         for (const auto &client : get_all_users()) {
             int clientId = stoi(client);
             int client_cluster = ((clientId - 1) % 3) + 1;
-            // only do this for clients in your own cluster
+            // Only publish the timelines of clients in the same cluster as the synchronizer
             if (client_cluster != clusterID) {
                 continue;
             }
@@ -265,19 +274,15 @@ public:
                 timelineJson["lines"].append(line);
             }
 
-            ID id;
-            ServerInfo info;
             for (const auto &follower : getFollowersOfUser(clientId)) {
-                // TODO: Determine which synchronizer is responsible for each follower
-                ClientContext ctx;
-                int followerCluster = ((stoi(follower) - 1) % 3) + 1;
-                id.set_id(followerCluster);
-                coord_stub->GetFollowerServer(&ctx, id, &info);
-
                 timelineJson["client"] = follower;
                 string timelineMsg = writer.write(timelineJson);
-                publishMessage("sync" + to_string(info.serverid()) + "_timeline_queue",
-                               timelineMsg);
+                int followerCluster = (stoi(follower) - 1) % 3 + 1;
+                for (auto& host : otherHosts) {
+                    if (host.clusterId != followerCluster) continue;
+                    publishMessage("sync" + to_string(host.serverId) + "_timeline_queue",
+                                   timelineMsg);
+                }
             }
         }
     }
@@ -366,7 +371,7 @@ void RunServer(string port_no) {
             rabbitMQ.consumeUserLists();
             rabbitMQ.consumeClientRelations();
             rabbitMQ.consumeTimelines();
-            sleep(5);
+            sleep_for(5s);
         }
     });
 
@@ -431,7 +436,7 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
 
     while (true) {
         // the synchronizers sync files every 5 seconds
-        sleep(5);
+        sleep_for(5s);
 
         grpc::ClientContext context;
         ServerList followerServers;
@@ -441,10 +446,14 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
         // making a request to the coordinator to see count of follower synchronizers
         coord_stub->GetAllFollowerServers(&context, id, &followerServers);
         {
-            lock_guard<mutex> lock(syncsMtx);
-            otherSyncs.clear();
-            for (const auto& hostId : followerServers.serverid()) {
-                otherSyncs.push_back(hostId);
+            lock_guard<mutex> lock(hostsMtx);
+            otherHosts.clear();
+            for (int i = 0; i < followerServers.serverid_size(); ++i) {
+                otherHosts.push_back({
+                    followerServers.serverid(i),
+                    followerServers.hostname(i),
+                    followerServers.port(i),
+                    followerServers.clusterid(i)});
             }
         }
 
@@ -485,7 +494,7 @@ void Heartbeat(ServerInfo serverInfo) {
             registered = true;
             registeredCV.notify_all();
         }
-        sleep(5);
+        sleep_for(5s);
     }
 }
 
