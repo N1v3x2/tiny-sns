@@ -171,6 +171,7 @@ public:
         declareQueue("synch" + to_string(synchID) + "_timeline_queue");
     }
 
+    // TODO: potentially need to publish this to an exchange
     void publishUserList() {
         vector<string> users = get_all_users();
         sort(users.begin(), users.end());
@@ -195,14 +196,16 @@ public:
             if (!message.empty()) {
                 Json::Value root;
                 Json::Reader reader;
-                if (reader.parse(message, root))
+                if (reader.parse(message, root)) {
                     for (const auto &user : root["users"])
                         allUsers.push_back(user.asString());
+                }
             }
         }
         updateAllUsersFile(allUsers);
     }
 
+    // TODO: potentially need to publish this to an exchange
     void publishClientRelations() {
         Json::Value relations;
         vector<string> users = get_all_users();
@@ -228,9 +231,8 @@ public:
 
     void consumeClientRelations() {
         vector<string> allUsers = get_all_users();
-
         lock_guard<mutex> lock(hostsMtx);
-        for (int i = 1; i <= (int)otherHosts.size(); i++) {
+        for (size_t i = 1; i <= otherHosts.size(); i++) {
             string queueName = "synch" + to_string(otherHosts[i].serverId) + "_clients_relations_queue";
             string message = consumeMessage(queueName, 1000); // 1 second timeout
 
@@ -239,14 +241,13 @@ public:
                 Json::Reader reader;
                 if (reader.parse(message, root)) {
                     for (const auto &client : allUsers) {
-                        string followerFile = get_dir_prefix() + client + "_followers.txt";
-                        SemGuard fileLock(followerFile);
-
-                        ofstream followerStream(followerFile, std::ios::app);
                         if (root.isMember(client)) {
+                            string followerFile = get_dir_prefix() + client + "_followers.txt";
+                            SemGuard fileLock(followerFile);
+                            ofstream fs(followerFile, std::ios::app);
                             for (const auto &follower : root[client]) {
                                 if (!file_contains_user(followerFile, follower.asString())) {
-                                    followerStream << follower.asString() << std::endl;
+                                    fs << follower.asString() << std::endl;
                                 }
                             }
                         }
@@ -263,9 +264,9 @@ public:
         Json::FastWriter writer;
         for (const auto &client : get_all_users()) {
             int clientId = stoi(client);
-            int client_cluster = ((clientId - 1) % 3) + 1;
+            int clientCluster = ((clientId - 1) % 3) + 1;
             // Only publish the timelines of clients in the same cluster as the synchronizer
-            if (client_cluster != clusterID) {
+            if (clientCluster != clusterID) {
                 continue;
             }
 
@@ -291,52 +292,16 @@ public:
     void consumeTimelines() {
         string queueName = "synch" + to_string(synchID) + "_timeline_queue";
         string message = consumeMessage(queueName, 1000); // 1 second timeout
-
         if (!message.empty()) {
             Json::Value root;
             Json::Reader reader;
             if (reader.parse(message, root)) {
                 string client = root["user"].asString();
-
-                // Determine latest message timestamp from user's file
-                time_t lastTimestamp = 0;
-
-                string clientFile = get_dir_prefix() + client + ".txt";
-                SemGuard lock(clientFile);
-
-                std::fstream fs(get_dir_prefix() + client + ".txt", fs.in | fs.out);
-                char fill;
-                std::tm postTime{};
-                string postUser, postContent, dummy;
-                while (fs.peek() != ifstream::traits_type::eof()) {
-                    fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
-                       >> fill >> postUser
-                       >> fill >> std::ws;
-                    std::getline(fs, postContent);
-                    std::getline(fs, dummy);
-                    lastTimestamp = std::mktime(&postTime);
-                }
-                fs.clear();
-
-                // Only add new posts to the user's timeline file
                 vector<string> lines;
                 for (const auto& line : root["lines"]) {
                     lines.push_back(line.asString());
                 }
-
-                std::istringstream ss;
-                for (int i = 0; i < (int)lines.size(); i += 4) {
-                    ss.clear();
-                    ss.str(lines[i]);
-                    ss >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y");
-                    time_t t = std::mktime(&postTime);
-                    if (t > lastTimestamp) {
-                        // Write the next 4 lines to the user file, which corresponds to a single post
-                        for (int j = i; j < i + 4; ++j) {
-                            fs << lines[j] << '\n';
-                        }
-                    }
-                }
+                updateClientTimeline(client, lines);
             }
         }
     }
@@ -351,31 +316,62 @@ private:
             if (!file_contains_user(usersFile, user))
                 fs << user << std::endl;
     }
+
+    void updateClientTimeline(const string& client, const vector<string>& lines) {
+        string clientFile = get_dir_prefix() + client + ".txt";
+        SemGuard lock(clientFile);
+
+        time_t lastTimestamp = 0;
+        std::fstream fs(get_dir_prefix() + client + ".txt", fs.in | fs.out);
+        char fill;
+        std::tm postTime{};
+        string postUser, postContent, dummy;
+        while (fs.peek() != ifstream::traits_type::eof()) {
+            fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
+               >> fill >> postUser
+               >> fill >> std::ws;
+            std::getline(fs, postContent);
+            std::getline(fs, dummy);
+            lastTimestamp = std::mktime(&postTime);
+        }
+        fs.clear();
+
+        std::istringstream ss;
+        for (size_t i = 0; i < lines.size(); i += 4) {
+            ss.clear();
+            ss.str(lines[i]);
+            ss >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y");
+            time_t t = std::mktime(&postTime);
+            if (t > lastTimestamp) {
+                // Next 4 lines = single post
+                for (size_t j = i; j < i + 4; ++j) {
+                    fs << lines[j] << std::endl;
+                }
+            }
+        }
+    }
 };
 
-void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ);
+void runSynchronizer(string port, SynchronizerRabbitMQ &rabbitMQ);
 
 void RunServer(string port_no) {
     // Wait for registration before continuing
     std::unique_lock<mutex> lock(registeredMtx);
     registeredCV.wait(lock, []{ return registered; });
 
-    // Initialize RabbitMQ connection
     SynchronizerRabbitMQ rabbitMQ("rabbitmq", 5672, synchID);
 
-    std::thread t1(run_synchronizer, port_no, std::ref(rabbitMQ));
-
-    // Create a consumer thread
+    std::thread producerThread(runSynchronizer, port_no, std::ref(rabbitMQ));
     std::thread consumerThread([&rabbitMQ]() {
         while (true) {
             rabbitMQ.consumeUserLists();
             rabbitMQ.consumeClientRelations();
             rabbitMQ.consumeTimelines();
-            sleep_for(5s);
+            sleep_for(3s);
         }
     });
 
-    t1.join();
+    producerThread.join();
     consumerThread.join();
 }
 
@@ -404,8 +400,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    string log_file_name = string("synchronizer-") + port;
-    google::InitGoogleLogging(log_file_name.c_str());
+    string logFilename = string("synchronizer-") + port;
+    google::InitGoogleLogging(logFilename.c_str());
     log(INFO, "Logging Initialized. Server starting...");
 
     coordAddr = coordIP + ":" + coordPort;
@@ -425,7 +421,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
+void runSynchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
     ServerInfo msg;
     Confirmation c;
 
@@ -435,7 +431,6 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
     msg.set_type("follower");
 
     while (true) {
-        // the synchronizers sync files every 5 seconds
         sleep_for(5s);
 
         grpc::ClientContext context;
@@ -443,7 +438,6 @@ void run_synchronizer(string port, SynchronizerRabbitMQ &rabbitMQ) {
         ID id;
         id.set_id(synchID);
 
-        // making a request to the coordinator to see count of follower synchronizers
         coord_stub->GetAllFollowerServers(&context, id, &followerServers);
         {
             lock_guard<mutex> lock(hostsMtx);
@@ -490,10 +484,6 @@ void Heartbeat(ServerInfo serverInfo) {
         ClientContext context;
         log(INFO, "Sending heartbeat to coordinator");
         grpc::Status status = coord_stub->Heartbeat(&context, serverInfo, &conf);
-        if (conf.status()) {
-            registered = true;
-            registeredCV.notify_all();
-        }
         sleep_for(5s);
     }
 }
@@ -501,34 +491,28 @@ void Heartbeat(ServerInfo serverInfo) {
 vector<string> get_lines_from_file(const string& filename) {
     vector<string> lines;
     string line;
-    ifstream fs;
 
     SemGuard fileLock(filename);
-
-    fs.open(filename);
+    ifstream fs(filename);
     while (fs.peek() != ifstream::traits_type::eof()) {
         getline(fs, line);
         if (!line.empty())
             lines.push_back(line);
     }
-    fs.close();
 
     return lines;
 }
 
 bool file_contains_user(const string& filename, const string& user) {
     vector<string> users = get_lines_from_file(filename);
-    SemGuard fileLock(filename);
 
-    bool found = false;
     for (size_t i = 0; i < users.size(); i++) {
         if (user == users[i]) {
-            found = true;
-            break;
+            return true;
         }
     }
 
-    return found;
+    return false;
 }
 
 vector<string> get_all_users() {
@@ -565,8 +549,8 @@ vector<string> getFollowersOfUser(int ID) {
     string clientID = to_string(ID);
     vector<string> usersInCluster = get_all_users();
 
-    for (auto userID : usersInCluster) { // Examine each user's following file
-        string file = get_dir_prefix() + userID + "_follow_list.txt";
+    for (auto userID : usersInCluster) {
+        string file = get_dir_prefix() + userID + "_followers.txt";
         SemGuard fileLock(file);
 
         if (file_contains_user(file, clientID)) {

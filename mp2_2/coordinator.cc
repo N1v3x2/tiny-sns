@@ -169,15 +169,18 @@ class CoordServiceImpl final : public CoordService::Service {
         int syncId = request->id();
         lock_guard<mutex> lock(followerSyncerMtx);
         for (int clusterId = 1; clusterId <= 3; ++clusterId) {
-            for (int i = 0; i < (int)followerSyncers[clusterId].size(); ++i) {
-                zNode* sync = followerSyncers[clusterId][i];
+            zNode* master = routingTable[clusterId - 1].front();
+            for (size_t i = 0; i < followerSyncers[clusterId - 1].size(); ++i) {
+                zNode* sync = followerSyncers[clusterId - 1][i];
                 if (sync->serverID == syncId) {
-                    zNode* server = routingTable[clusterId][i];
+                    zNode* server = routingTable[clusterId - 1][i];
                     reply->set_serverid(server->serverID);
                     reply->set_hostname(server->hostname);
                     reply->set_port(server->port);
                     reply->set_clusterid(clusterId);
-                    reply->set_ismaster(i == 0);
+                    reply->set_ismaster(
+                        (server == master && master->isActive()) ||
+                        (!master->isActive() && server->isActive()));
                     return Status::OK;
                 }
             }
