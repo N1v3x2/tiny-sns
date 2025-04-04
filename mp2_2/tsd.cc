@@ -18,13 +18,13 @@
 #include <string>
 #include <thread>
 #include <map>
-#include <algorithm>
 #define log(severity, msg) \
     LOG(severity) << msg;  \
     google::FlushLogFiles(google::severity);
 
 #include "sns.grpc.pb.h"
 #include "coordinator.grpc.pb.h"
+#include "file_utils.h"
 
 using namespace std::chrono_literals;
 using namespace std::this_thread;
@@ -69,27 +69,6 @@ struct Client {
     Client(const string& uname) : username(uname) {}
     bool operator==(const Client& c1) const {
         return (username == c1.username);
-    }
-};
-
-class SemGuard {
-    sem_t* sem;
-
-    string makeName(const string& filename) {
-        string semName = filename;
-        std::replace(semName.begin(), semName.end(), '/', '_');
-        semName.insert(0, 1, '/');
-        return semName;
-    }
-
-public:
-    SemGuard(const string& name) {
-        sem = sem_open(makeName(name).c_str(), O_CREAT, 0644, 1);
-        sem_wait(sem);
-    }
-    ~SemGuard() {
-        sem_post(sem);
-        sem_close(sem);
     }
 };
 
@@ -157,6 +136,7 @@ class SNSServiceImpl final : public SNSService::Service {
             fs.clear();
             fs.open(serverDir + toFollow + "_followers.txt", std::ios::app);
             fs << username << endl;
+            fs.close();
         }
 
         ServerInfo slaveInfo = GetSlaveInfo();
@@ -225,6 +205,11 @@ class SNSServiceImpl final : public SNSService::Service {
             ofstream fs(serverDir + username + ".txt"); fs.close();
             fs.open(serverDir + username + "_following.txt"); fs.close();
             fs.open(serverDir + username + "_followers.txt"); fs.close();
+
+            // Add user to all_users.txt
+            SemGuard fileLock(allUsersFile);
+            fs.open(allUsersFile, fs.app);
+            fs << username << endl;
         }
 
         ServerInfo slaveInfo = GetSlaveInfo();
@@ -271,8 +256,6 @@ class SNSServiceImpl final : public SNSService::Service {
 
             time_t lastRead = 0;
             while (true) {
-                std::this_thread::sleep_for(5s);
-
                 vector<Message> msgs;
                 {
                     SemGuard lock(client->filename);
@@ -287,7 +270,7 @@ class SNSServiceImpl final : public SNSService::Service {
                         std::getline(fs, dummy);
 
                         // Only read new posts (since last read)
-                        if (std::mktime(&postTime) <= lastRead) break;
+                        if (std::mktime(&postTime) <= lastRead) continue;
 
                         Timestamp* timestamp = new Timestamp();
                         timestamp->set_seconds(std::mktime(&postTime));
@@ -297,7 +280,6 @@ class SNSServiceImpl final : public SNSService::Service {
                         timelineMsg.set_msg(postContent);
                         msgs.push_back(timelineMsg);
                     }
-
                     fs.close();
                 }
 
@@ -310,6 +292,8 @@ class SNSServiceImpl final : public SNSService::Service {
                         stream->Write(msgs[i]);
                     lastRead = TimeUtil::TimestampToTimeT(msgs.back().timestamp());
                 }
+
+                sleep_for(5s);
             }
         });
 
@@ -355,9 +339,7 @@ class SNSServiceImpl final : public SNSService::Service {
                 }
             }
         }
-
         monitorTimeline.join();
-
         return Status::OK;
     }
 };
@@ -427,14 +409,24 @@ void UpdateClientDB() {
         sleep_for(3s);
 
         std::lock_guard<std::mutex> lock(clientMtx);
+        // Update the list of all users
         {
             SemGuard fileLock(allUsersFile);
             fs.clear();
             fs.open(allUsersFile);
             while (fs.peek() != ifstream::traits_type::eof()) {
                 getline(fs, username);
-                if (!clientDB.count(username))
-                    clientDB[username] = new Client(username);
+                if (!clientDB.count(username)) {
+                    Client *client = new Client(username);
+                    client->filename = serverDir + username + ".txt";
+                    client->followerFile = serverDir + username + "_followers.txt";
+                    client->followingFile = serverDir + username + "_following.txt";
+                    clientDB[username] = client;
+
+                    ofstream newFS(serverDir + username + ".txt"); newFS.close();
+                    newFS.open(serverDir + username + "_following.txt"); newFS.close();
+                    newFS.open(serverDir + username + "_followers.txt"); newFS.close();
+                } 
             }
             fs.close();
         }
@@ -442,7 +434,7 @@ void UpdateClientDB() {
         // Update follower & following information
         for (auto& [uname, user] : clientDB) {
             {
-                SemGuard fileLock(user->followerFile);
+                SemGuard fileLock(user->followingFile);
                 fs.clear();
                 fs.open(user->followingFile);
                 while (fs.peek() != ifstream::traits_type::eof()) {
@@ -461,6 +453,7 @@ void UpdateClientDB() {
                     if (!user->followers.count(follower))
                         user->followers[follower] = clientDB[follower];
                 }
+                fs.close();
             }
         }
     }
@@ -535,8 +528,10 @@ int main(int argc, char** argv) {
     clusterDir = "cluster_" + to_string(clusterId) + "/";
     serverDir = clusterDir + to_string(serverId) + "/";
     allUsersFile = serverDir + "all_users.txt";
+
     {
         SemGuard lock(allUsersFile);
+        rmdir(clusterDir.data());
         mkdir(clusterDir.data(), 0777);
         mkdir(serverDir.data(), 0777);
         ofstream fs(allUsersFile); fs.close();

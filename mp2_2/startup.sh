@@ -20,7 +20,6 @@ sleep 1
 ./tsd -c 2 -s 2 -h localhost -k 9000 -p 10004 &
 ./tsd -c 3 -s 2 -h localhost -k 9000 -p 10005 &
 
-
 sleep 1
 
 echo "STARTING SYNCHRONIZER PROCESSES"

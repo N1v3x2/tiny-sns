@@ -9,7 +9,6 @@ export PKG_CONFIG_PATH = /home/csce438/.local/lib/pkgconfig:/home/csce438/grpc/t
 HOST_SYSTEM = $(shell uname | cut -f 1 -d_)
 SYSTEM ?= $(HOST_SYSTEM)
 CXX = g++
-# CPPFLAGS += `pkg-config --cflags protobuf grpc rabbitmq-c jsoncpp`
 CPPFLAGS += `pkg-config --cflags protobuf grpc `
 CXXFLAGS += -std=c++17 -g
 
@@ -38,15 +37,14 @@ all: system-check tsc tsd coordinator synchronizer
 tsc: client.o coordinator.pb.o coordinator.grpc.pb.o sns.pb.o sns.grpc.pb.o tsc.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
-tsd: coordinator.pb.o coordinator.grpc.pb.o sns.pb.o sns.grpc.pb.o tsd.o
+tsd: coordinator.pb.o coordinator.grpc.pb.o sns.pb.o sns.grpc.pb.o tsd.o file_utils.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 coordinator: coordinator.pb.o coordinator.grpc.pb.o coordinator.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
-synchronizer: coordinator.pb.o coordinator.grpc.pb.o sns.pb.o sns.grpc.pb.o synchronizer.o
+synchronizer: coordinator.pb.o coordinator.grpc.pb.o sns.pb.o sns.grpc.pb.o synchronizer.o file_utils.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
-
 
 .PRECIOUS: %.grpc.pb.cc
 %.grpc.pb.cc: %.proto

@@ -31,7 +31,6 @@
 #include "google/protobuf/repeated_field.h"  // IWYU pragma: export
 #include "google/protobuf/extension_set.h"  // IWYU pragma: export
 #include "google/protobuf/unknown_field_set.h"
-#include "google/protobuf/timestamp.pb.h"
 // @@protoc_insertion_point(includes)
 
 // Must be included last.
@@ -460,7 +459,6 @@ class ServerList final :
     kHostnameFieldNumber = 2,
     kPortFieldNumber = 3,
     kTypeFieldNumber = 4,
-    kClusterIDFieldNumber = 5,
   };
   // repeated int32 serverID = 1;
   int serverid_size() const;
@@ -572,26 +570,6 @@ class ServerList final :
   ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField<std::string>* _internal_mutable_type();
 
   public:
-  // repeated int32 clusterID = 5;
-  int clusterid_size() const;
-  private:
-  int _internal_clusterid_size() const;
-
-  public:
-  void clear_clusterid() ;
-  ::int32_t clusterid(int index) const;
-  void set_clusterid(int index, ::int32_t value);
-  void add_clusterid(::int32_t value);
-  const ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>& clusterid() const;
-  ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>* mutable_clusterid();
-
-  private:
-  ::int32_t _internal_clusterid(int index) const;
-  void _internal_add_clusterid(::int32_t value);
-  const ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>& _internal_clusterid() const;
-  ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>* _internal_mutable_clusterid();
-
-  public:
   // @@protoc_insertion_point(class_scope:csce438.ServerList)
  private:
   class _Internal;
@@ -605,8 +583,6 @@ class ServerList final :
     ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField<std::string> hostname_;
     ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField<std::string> port_;
     ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField<std::string> type_;
-    ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t> clusterid_;
-    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _clusterid_cached_byte_size_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1465,50 +1441,6 @@ ServerList::_internal_type() const {
 inline ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField<std::string>*
 ServerList::_internal_mutable_type() {
   return &_impl_.type_;
-}
-
-// repeated int32 clusterID = 5;
-inline int ServerList::_internal_clusterid_size() const {
-  return _impl_.clusterid_.size();
-}
-inline int ServerList::clusterid_size() const {
-  return _internal_clusterid_size();
-}
-inline void ServerList::clear_clusterid() {
-  _internal_mutable_clusterid()->Clear();
-}
-inline ::int32_t ServerList::clusterid(int index) const {
-  // @@protoc_insertion_point(field_get:csce438.ServerList.clusterID)
-  return _internal_clusterid(index);
-}
-inline void ServerList::set_clusterid(int index, ::int32_t value) {
-  _internal_mutable_clusterid()->Set(index, value);
-  // @@protoc_insertion_point(field_set:csce438.ServerList.clusterID)
-}
-inline void ServerList::add_clusterid(::int32_t value) {
-  _internal_add_clusterid(value);
-  // @@protoc_insertion_point(field_add:csce438.ServerList.clusterID)
-}
-inline const ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>& ServerList::clusterid() const {
-  // @@protoc_insertion_point(field_list:csce438.ServerList.clusterID)
-  return _internal_clusterid();
-}
-inline ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>* ServerList::mutable_clusterid() {
-  // @@protoc_insertion_point(field_mutable_list:csce438.ServerList.clusterID)
-  return _internal_mutable_clusterid();
-}
-
-inline ::int32_t ServerList::_internal_clusterid(int index) const {
-  return _internal_clusterid().Get(index);
-}
-inline void ServerList::_internal_add_clusterid(::int32_t value) {
-  _internal_mutable_clusterid()->Add(value);
-}
-inline const ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>& ServerList::_internal_clusterid() const {
-  return _impl_.clusterid_;
-}
-inline ::PROTOBUF_NAMESPACE_ID::RepeatedField<::int32_t>* ServerList::_internal_mutable_clusterid() {
-  return &_impl_.clusterid_;
 }
 
 // -------------------------------------------------------------------

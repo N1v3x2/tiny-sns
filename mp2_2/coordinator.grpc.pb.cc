@@ -25,9 +25,8 @@ static const char* CoordService_method_names[] = {
   "/csce438.CoordService/Heartbeat",
   "/csce438.CoordService/GetServer",
   "/csce438.CoordService/GetSlave",
-  "/csce438.CoordService/GetAllFollowerServers",
   "/csce438.CoordService/GetFollowerServer",
-  "/csce438.CoordService/GetClusterFollowerServers",
+  "/csce438.CoordService/GetFollowerServers",
 };
 
 std::unique_ptr< CoordService::Stub> CoordService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
@@ -40,9 +39,8 @@ CoordService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& chann
   : channel_(channel), rpcmethod_Heartbeat_(CoordService_method_names[0], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_GetServer_(CoordService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_GetSlave_(CoordService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetAllFollowerServers_(CoordService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetFollowerServer_(CoordService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
-  , rpcmethod_GetClusterFollowerServers_(CoordService_method_names[5], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_GetFollowerServer_(CoordService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_GetFollowerServers_(CoordService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
 
 ::grpc::Status CoordService::Stub::Heartbeat(::grpc::ClientContext* context, const ::csce438::ServerInfo& request, ::csce438::Confirmation* response) {
@@ -114,29 +112,6 @@ void CoordService::Stub::async::GetSlave(::grpc::ClientContext* context, const :
   return result;
 }
 
-::grpc::Status CoordService::Stub::GetAllFollowerServers(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerList* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetAllFollowerServers_, context, request, response);
-}
-
-void CoordService::Stub::async::GetAllFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetAllFollowerServers_, context, request, response, std::move(f));
-}
-
-void CoordService::Stub::async::GetAllFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetAllFollowerServers_, context, request, response, reactor);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::PrepareAsyncGetAllFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::ServerList, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetAllFollowerServers_, context, request);
-}
-
-::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::AsyncGetAllFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  auto* result =
-    this->PrepareAsyncGetAllFollowerServersRaw(context, request, cq);
-  result->StartCall();
-  return result;
-}
-
 ::grpc::Status CoordService::Stub::GetFollowerServer(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerInfo* response) {
   return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetFollowerServer_, context, request, response);
 }
@@ -160,25 +135,25 @@ void CoordService::Stub::async::GetFollowerServer(::grpc::ClientContext* context
   return result;
 }
 
-::grpc::Status CoordService::Stub::GetClusterFollowerServers(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerList* response) {
-  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetClusterFollowerServers_, context, request, response);
+::grpc::Status CoordService::Stub::GetFollowerServers(::grpc::ClientContext* context, const ::csce438::ID& request, ::csce438::ServerList* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_GetFollowerServers_, context, request, response);
 }
 
-void CoordService::Stub::async::GetClusterFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, std::function<void(::grpc::Status)> f) {
-  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetClusterFollowerServers_, context, request, response, std::move(f));
+void CoordService::Stub::async::GetFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetFollowerServers_, context, request, response, std::move(f));
 }
 
-void CoordService::Stub::async::GetClusterFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, ::grpc::ClientUnaryReactor* reactor) {
-  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetClusterFollowerServers_, context, request, response, reactor);
+void CoordService::Stub::async::GetFollowerServers(::grpc::ClientContext* context, const ::csce438::ID* request, ::csce438::ServerList* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_GetFollowerServers_, context, request, response, reactor);
 }
 
-::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::PrepareAsyncGetClusterFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
-  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::ServerList, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetClusterFollowerServers_, context, request);
+::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::PrepareAsyncGetFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::csce438::ServerList, ::csce438::ID, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_GetFollowerServers_, context, request);
 }
 
-::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::AsyncGetClusterFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
+::grpc::ClientAsyncResponseReader< ::csce438::ServerList>* CoordService::Stub::AsyncGetFollowerServersRaw(::grpc::ClientContext* context, const ::csce438::ID& request, ::grpc::CompletionQueue* cq) {
   auto* result =
-    this->PrepareAsyncGetClusterFollowerServersRaw(context, request, cq);
+    this->PrepareAsyncGetFollowerServersRaw(context, request, cq);
   result->StartCall();
   return result;
 }
@@ -217,16 +192,6 @@ CoordService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       CoordService_method_names[3],
       ::grpc::internal::RpcMethod::NORMAL_RPC,
-      new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
-          [](CoordService::Service* service,
-             ::grpc::ServerContext* ctx,
-             const ::csce438::ID* req,
-             ::csce438::ServerList* resp) {
-               return service->GetAllFollowerServers(ctx, req, resp);
-             }, this)));
-  AddMethod(new ::grpc::internal::RpcServiceMethod(
-      CoordService_method_names[4],
-      ::grpc::internal::RpcMethod::NORMAL_RPC,
       new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ID, ::csce438::ServerInfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
           [](CoordService::Service* service,
              ::grpc::ServerContext* ctx,
@@ -235,14 +200,14 @@ CoordService::Service::Service() {
                return service->GetFollowerServer(ctx, req, resp);
              }, this)));
   AddMethod(new ::grpc::internal::RpcServiceMethod(
-      CoordService_method_names[5],
+      CoordService_method_names[4],
       ::grpc::internal::RpcMethod::NORMAL_RPC,
       new ::grpc::internal::RpcMethodHandler< CoordService::Service, ::csce438::ID, ::csce438::ServerList, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
           [](CoordService::Service* service,
              ::grpc::ServerContext* ctx,
              const ::csce438::ID* req,
              ::csce438::ServerList* resp) {
-               return service->GetClusterFollowerServers(ctx, req, resp);
+               return service->GetFollowerServers(ctx, req, resp);
              }, this)));
 }
 
@@ -270,13 +235,6 @@ CoordService::Service::~Service() {
   return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
 }
 
-::grpc::Status CoordService::Service::GetAllFollowerServers(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerList* response) {
-  (void) context;
-  (void) request;
-  (void) response;
-  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
-}
-
 ::grpc::Status CoordService::Service::GetFollowerServer(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerInfo* response) {
   (void) context;
   (void) request;
@@ -284,7 +242,7 @@ CoordService::Service::~Service() {
   return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
 }
 
-::grpc::Status CoordService::Service::GetClusterFollowerServers(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerList* response) {
+::grpc::Status CoordService::Service::GetFollowerServers(::grpc::ServerContext* context, const ::csce438::ID* request, ::csce438::ServerList* response) {
   (void) context;
   (void) request;
   (void) response;

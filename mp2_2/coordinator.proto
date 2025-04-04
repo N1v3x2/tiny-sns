@@ -1,6 +1,5 @@
 syntax = "proto3";
 package csce438;
-import "google/protobuf/timestamp.proto";
 
 // ------------------------------------------------------------
 // The coordinator service definition
@@ -11,9 +10,8 @@ service CoordService {
     rpc Heartbeat (ServerInfo) returns (Confirmation) {}
     rpc GetServer (ID) returns (ServerInfo) {}
     rpc GetSlave (ID) returns (ServerInfo) {}
-    rpc GetAllFollowerServers (ID) returns (ServerList) {}
     rpc GetFollowerServer (ID) returns (ServerInfo) {}
-    rpc GetClusterFollowerServers (ID) returns (ServerList) {}
+    rpc GetFollowerServers (ID) returns (ServerList) {}
 }
 
 // server info message definition
@@ -32,7 +30,6 @@ message ServerList {
     repeated string hostname = 2;
     repeated string port = 3;
     repeated string type = 4;
-    repeated int32 clusterID = 5;
 }
 
 // confirmation message definition
