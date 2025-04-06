@@ -63,8 +63,9 @@ using table = vector<vector<zNode*>>;
 table routingTable(3, vector<zNode*>()), synchronizers(3, vector<zNode*>());
 mutex routingTableMtx, synchronizerMtx;
 
-zNode* findServer(int clusterId, int serverId, string type); 
-zNode* findMaster(int clusterId);
+zNode* findServer(int clusterID, int serverID, string type); 
+zNode* getMasterServer(int clusterID);
+zNode* getSlaveServer(int clusterID);
 std::time_t getTimeNow();
 void checkHeartbeat();
 
@@ -76,10 +77,12 @@ class CoordServiceImpl final : public CoordService::Service {
         string type = request->type();
 
         log(INFO,
-            "Received heartbeat from server " +
+            "Received heartbeat from " + type + " " +
             to_string(serverID) + " in cluster " + to_string(clusterID));
 
-        zNode* server = findServer(clusterID - 1, serverID, type);
+        lock_guard<mutex> lock(synchronizerMtx);
+        lock_guard<mutex> lock2(routingTableMtx);
+        zNode* server = findServer(clusterID, serverID, type);
 
         if (!server) { 
             // Register server after its first heartbeat
@@ -92,10 +95,8 @@ class CoordServiceImpl final : public CoordService::Service {
                 false);
 
             if (newserver->type == SERVER) {
-                lock_guard<mutex> lock(routingTableMtx);
                 routingTable[clusterID - 1].push_back(newserver);
             } else if (newserver->type == SYNC) {
-                lock_guard<mutex> lock(synchronizerMtx);
                 synchronizers[clusterID - 1].push_back(newserver);
             } else {
                 log(WARNING, "Unknown server type attempted registration");
@@ -109,26 +110,27 @@ class CoordServiceImpl final : public CoordService::Service {
         }
 
         reply->set_status(true);
-        log(INFO, "Sending heartbeat confirmation to server " + to_string(serverID) + " at cluster " + to_string(clusterID));
+        log(INFO, "Sending heartbeat confirmation to " + type + " " +
+            to_string(serverID) + " at cluster " + to_string(clusterID));
         return Status::OK;
     }
 
     // Return the master
     Status GetServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
-        int clientId = request->id();
-        int clusterId = (clientId - 1) % 3 + 1;
+        int clientID = request->id();
+        int clusterID = (clientID - 1) % 3 + 1;
         log(INFO,
             "Received `GetServer` request from client " +
-            to_string(clientId));
+            to_string(clientID));
 
         // First active server in the routing table is the master
         lock_guard<mutex> lock(routingTableMtx);
-        zNode* server = findMaster(clusterId);
+        zNode* server = getMasterServer(clusterID);
         reply->set_serverid(server->serverID);
         reply->set_hostname(server->hostname);
         reply->set_port(server->port);
         reply->set_type(server->type);
-        reply->set_clusterid(clusterId);
+        reply->set_clusterid(clusterID);
         reply->set_ismaster(true);
 
         log(INFO, "Sending `ServerInfo` for `GetServer` request");
@@ -136,16 +138,16 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 
     Status GetSlave(ServerContext* context, const ID* request, ServerInfo* reply) override {
-        int cluster_id = request->id();
-        log(INFO, "Received `GetSlave` request for clutser " + to_string(cluster_id));
+        int clusterID = request->id();
+        log(INFO, "Received `GetSlave` request for clutser " + to_string(clusterID));
 
         lock_guard<mutex> lock(routingTableMtx);
-        zNode* slave = routingTable[cluster_id - 1].back();
+        zNode* slave = getSlaveServer(clusterID);
         reply->set_serverid(slave->serverID);
         reply->set_hostname(slave->hostname);
         reply->set_port(slave->port);
         reply->set_type(slave->type);
-        reply->set_clusterid(cluster_id);
+        reply->set_clusterid(clusterID);
         reply->set_ismaster(false);
 
         log(INFO, "Sending `ServerInfo` from `GetSlave` request");
@@ -153,22 +155,23 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 
     Status GetFollowerServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
-        int syncId = request->id();
-        int clusterId = (syncId - 1) % 3 + 1;
+        int synchronizerID = request->id();
+        int clusterID = (synchronizerID - 1) % 3 + 1;
+        log(INFO, "Received `GetFollowerServer` request");
 
         lock_guard<mutex> lock(synchronizerMtx);
-        zNode* master = routingTable[clusterId - 1].front();
+        zNode* master = getMasterServer(clusterID);
 
-        for (size_t i = 0; i < synchronizers[clusterId - 1].size(); ++i) {
-            zNode* sync = synchronizers[clusterId - 1][i];
-            if (sync->serverID == syncId) {
-                zNode* server = routingTable[clusterId - 1][i];
+        for (size_t i = 0; i < synchronizers[clusterID - 1].size(); ++i) {
+            zNode* synchronizer = synchronizers[clusterID - 1][i];
+
+            if (synchronizer->serverID == synchronizerID) {
+                zNode* server = routingTable[clusterID - 1][i];
                 reply->set_serverid(server->serverID);
                 reply->set_hostname(server->hostname);
                 reply->set_port(server->port);
-                reply->set_clusterid(clusterId);
-                reply->set_ismaster((server == master && master->isActive()) ||
-                                    (!master->isActive() && server->isActive()));
+                reply->set_clusterid(clusterID);
+                reply->set_ismaster(server == master && server->isActive());
                 break;
             }
         }
@@ -176,17 +179,17 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 
     Status GetFollowerServers(ServerContext* context, const ID* id, ServerList* reply) override {
-        int syncId = id->id();
+        int synchronizerID = id->id();
         log(INFO, "Received `GetAllFollowerServers` request from synchronizer " +
-            to_string(syncId));
+            to_string(synchronizerID));
         lock_guard<mutex> lock(synchronizerMtx);
         for (auto& cluster : synchronizers) {
-            for (auto& syncer : cluster) {
-                if (syncer->serverID == syncId) continue;
-                reply->add_serverid(syncer->serverID);
-                reply->add_hostname(syncer->hostname);
-                reply->add_port(syncer->port);
-                reply->add_type(syncer->type);
+            for (auto& synchronizer : cluster) {
+                if (synchronizer->serverID == synchronizerID) continue;
+                reply->add_serverid(synchronizer->serverID);
+                reply->add_hostname(synchronizer->hostname);
+                reply->add_port(synchronizer->port);
+                reply->add_type(synchronizer->type);
             }
         }
         log(INFO, "Sending `ServerList` from `GetAllFollowerServers` request");
@@ -195,32 +198,22 @@ class CoordServiceImpl final : public CoordService::Service {
 };
 
 void RunServer(string port_no) {
-    // start thread to check heartbeats
     std::thread hb(checkHeartbeat);
 
     string serverAddr("127.0.0.1:" + port_no);
     CoordServiceImpl service;
 
-    // grpc::EnableDefaultHealthCheckService(true);
-    // grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     ServerBuilder builder;
-
-    // Listen on the given address without any authentication mechanism.
     builder.AddListeningPort(serverAddr, grpc::InsecureServerCredentials());
-
-    // Register "service" as the instance through which we'll communicate with
-    // clients. In this case it corresponds to an *synchronous* service.
     builder.RegisterService(&service);
 
-    // Finally assemble the server.
     std::unique_ptr<Server> server(builder.BuildAndStart());
 
     cout << "Server listening on " << serverAddr << endl;
     log(INFO, "Server listening on " + serverAddr);
 
-    // Wait for the server to shutdown. Note that some other thread must be
-    // responsible for shutting down the server for this call to ever return.
     server->Wait();
+    hb.join();
 }
 
 int main(int argc, char** argv) {
@@ -244,10 +237,10 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-zNode* findServer(int clusterId, int serverId, string type) {
+zNode* findServer(int clusterID, int serverID, string type) {
     table servers = type == SERVER ? routingTable : synchronizers;
-    for (auto& node : servers[clusterId])
-        if (node->serverID == serverId) return node;
+    for (auto& node : servers[clusterID - 1])
+        if (node->serverID == serverID) return node;
     return nullptr;
 }
 
@@ -293,9 +286,14 @@ bool zNode::isActive() {
     return !missed_heartbeat || difftime(getTimeNow(), last_heartbeat) < 10;
 }
 
-zNode* findMaster(int clusterId) {
-    for (auto& s : routingTable[clusterId - 1]) {
+zNode* getMasterServer(int clusterID) {
+    for (auto& s : routingTable[clusterID - 1]) {
         if (s->isActive()) return s;
     }
     return nullptr;
+}
+
+zNode* getSlaveServer(int clusterID) {
+    if (routingTable[clusterID - 1].empty()) return nullptr;
+    return routingTable[clusterID - 1].back();
 }

@@ -62,7 +62,7 @@ unique_ptr<CoordService::Stub> coordStub;
 
 struct Client {
     string username;
-    string filename;
+    string timelineFile;
     string followerFile;
     string followingFile;
     map<string, Client*> followers, following;
@@ -197,14 +197,14 @@ class SNSServiceImpl final : public SNSService::Service {
             }
 
             Client* client = new Client(username);
-            client->filename = serverDir + username + ".txt";
+            client->timelineFile = serverDir + username + "_timeline.txt";
             client->followerFile = serverDir + username + "_followers.txt";
             client->followingFile = serverDir + username + "_following.txt";
             clientDB[username] = client;
 
-            ofstream fs(serverDir + username + ".txt"); fs.close();
-            fs.open(serverDir + username + "_following.txt"); fs.close();
-            fs.open(serverDir + username + "_followers.txt"); fs.close();
+            ofstream fs(client->timelineFile); fs.close();
+            fs.open(client->followingFile); fs.close();
+            fs.open(client->followerFile); fs.close();
 
             // Add user to all_users.txt
             SemGuard fileLock(allUsersFile);
@@ -258,9 +258,9 @@ class SNSServiceImpl final : public SNSService::Service {
             while (true) {
                 vector<Message> msgs;
                 {
-                    SemGuard lock(client->filename);
+                    SemGuard lock(client->timelineFile);
                     fs.clear();
-                    fs.open(client->filename);
+                    fs.open(client->timelineFile);
 
                     while (fs.peek() != ifstream::traits_type::eof()) {
                         fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
@@ -321,11 +321,11 @@ class SNSServiceImpl final : public SNSService::Service {
             std::lock_guard<std::mutex> lock(clientMtx);
             for (auto& [followerUname, follower] : client->followers) {
                 {
-                    SemGuard fileLock(follower->filename);
+                    SemGuard fileLock(follower->timelineFile);
                     time_t curr_time = time(nullptr);
                     std::tm* t = gmtime(&curr_time);
                     fs.clear();
-                    fs.open(follower->filename, std::ios::app);
+                    fs.open(follower->timelineFile, std::ios::app);
                     fs << "T " << asctime(t)
                        << "U " << username << '\n'
                        << "W " << msg.msg() << '\n';
@@ -409,7 +409,6 @@ void UpdateClientDB() {
         sleep_for(3s);
 
         std::lock_guard<std::mutex> lock(clientMtx);
-        // Update the list of all users
         {
             SemGuard fileLock(allUsersFile);
             fs.clear();
@@ -418,14 +417,14 @@ void UpdateClientDB() {
                 getline(fs, username);
                 if (!clientDB.count(username)) {
                     Client *client = new Client(username);
-                    client->filename = serverDir + username + ".txt";
+                    client->timelineFile = serverDir + username + "_timeline.txt";
                     client->followerFile = serverDir + username + "_followers.txt";
                     client->followingFile = serverDir + username + "_following.txt";
                     clientDB[username] = client;
 
-                    ofstream newFS(serverDir + username + ".txt"); newFS.close();
-                    newFS.open(serverDir + username + "_following.txt"); newFS.close();
-                    newFS.open(serverDir + username + "_followers.txt"); newFS.close();
+                    ofstream newFS(client->timelineFile); newFS.close();
+                    newFS.open(client->followerFile); newFS.close();
+                    newFS.open(client->followingFile); newFS.close();
                 } 
             }
             fs.close();
@@ -531,7 +530,6 @@ int main(int argc, char** argv) {
 
     {
         SemGuard lock(allUsersFile);
-        rmdir(clusterDir.data());
         mkdir(clusterDir.data(), 0777);
         mkdir(serverDir.data(), 0777);
         ofstream fs(allUsersFile); fs.close();

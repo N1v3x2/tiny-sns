@@ -1,9 +1,7 @@
 #!/bin/bash
 
-# need to run this command below
-# chmod +x startup.sh
+rm -rf ./cluster_*
 
-# Start the coordinator
 ./coordinator -p 9000 &
 
 sleep 2
