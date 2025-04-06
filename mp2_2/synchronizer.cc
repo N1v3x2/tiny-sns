@@ -230,7 +230,7 @@ public:
 
             switch (res.reply_type) {
                 case AMQP_RESPONSE_NORMAL: {
-                    cout << "Received message" << endl;
+                    /*cout << "Received message" << endl;*/
 
                     string message(static_cast<char *>(envelope.message.body.bytes),
                                    envelope.message.body.len);
@@ -262,7 +262,7 @@ public:
 private:
     void consumeUserList(const string& message) {
         log(INFO, "Consuming user lists");
-        cout << "User list" << message << endl;
+        /*cout << "User list" << message << endl;*/
         vector<string> allUsers;
         if (!message.empty()) {
             Json::Value root;
@@ -309,12 +309,19 @@ private:
     }
 
     void updateAllUsersFile(const vector<string>& users) {
-        vector<string> allUsers = getAllUsers();
+        vector<string> currentUsers = getAllUsers();
         string file = getDirPrefix() + "all_users.txt";
+        /*cout << "Attempting to update " << file << endl;*/
+        /*cout << "Current users: " << endl;*/
+        /*for (auto& user : currentUsers) cout << user << ", ";*/
+        /*cout << endl;*/
+        /*cout << "New users: " << endl;*/
+        /*for (auto& user : users) cout << user << ", ";*/
+        /*cout << endl;*/
         SemGuard fileLock(file);
         ofstream fs(file, fs.app);
         for (string user : users) {
-            if (std::find(allUsers.begin(), allUsers.end(), user) == allUsers.end()) {
+            if (std::find(currentUsers.begin(), currentUsers.end(), user) == currentUsers.end()) {
                 fs << user << std::endl;
             }
         }
@@ -462,7 +469,7 @@ void publishMessages(string port) {
 
     while (true) {
         if (isMaster) {
-            cout << "Producing message" << endl;
+            /*cout << "Producing message" << endl;*/
             producer.publishUserList();
             producer.publishUserRelations();
             producer.publishTimelines();
@@ -521,11 +528,9 @@ vector<string> getLinesFromFile(const string& filename) {
         }
         return lines;
     };
-    string masterFile = "cluster_" + to_string(clusterID) + "/1/" + filename;
-    string slaveFile = "cluster_" + to_string(clusterID) + "/2/" + filename;
-    vector<string> masterLines = getLines(masterFile);
-    vector<string> slaveLines = getLines(slaveFile);
-    return masterLines.size() >= slaveLines.size() ? masterLines : slaveLines;
+    string masterFile = "cluster_" + to_string(clusterID) + "/" +
+        to_string(serverID) + "/" + filename;
+    return getLines(masterFile);
 }
 vector<string> getAllUsers() { return getLinesFromFile("all_users.txt"); }
 vector<string> getTimeline(int userID) { return getLinesFromFile(to_string(userID) + "_timeline.txt"); }

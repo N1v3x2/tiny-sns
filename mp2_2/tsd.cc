@@ -56,7 +56,7 @@ using std::unique_ptr;
 using std::cout;
 using std::endl;
 
-int serverId, clusterId;
+int serverID, clusterID;
 string clusterDir, serverDir, allUsersFile;
 unique_ptr<CoordService::Stub> coordStub;
 
@@ -140,7 +140,7 @@ class SNSServiceImpl final : public SNSService::Service {
         }
 
         ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverId;
+        bool isMaster = slaveInfo.serverid() != serverID;
 
         // Master: replicate new user to slave
         if (isMaster) {
@@ -213,7 +213,7 @@ class SNSServiceImpl final : public SNSService::Service {
         }
 
         ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverId;
+        bool isMaster = slaveInfo.serverid() != serverID;
 
         // Master: replicate to slave
         if (isMaster) {
@@ -288,8 +288,8 @@ class SNSServiceImpl final : public SNSService::Service {
                         "User " +
                         client->username +
                         " has unread posts; sending latest posts...");
-                    for (int i = (int)msgs.size() - 1; i >= 0; --i)
-                        stream->Write(msgs[i]);
+                    for (auto& msg : msgs)
+                        stream->Write(msg);
                     lastRead = TimeUtil::TimestampToTimeT(msgs.back().timestamp());
                 }
 
@@ -298,7 +298,7 @@ class SNSServiceImpl final : public SNSService::Service {
         });
 
         ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverId;
+        bool isMaster = slaveInfo.serverid() != serverID;
 
         std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
         ClientContext masterSlaveCtx;
@@ -346,7 +346,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
 ServerInfo GetSlaveInfo() {
     ClientContext masterSlaveCtx;
-    ID id; id.set_id(clusterId);
+    ID id; id.set_id(clusterID);
     ServerInfo slaveInfo;
     coordStub->GetSlave(&masterSlaveCtx, id, &slaveInfo);
     return slaveInfo;
@@ -379,11 +379,11 @@ void Heartbeat(
     string coord_address = coordIP + ":" + coordPort;
 
     ServerInfo info;
-    info.set_serverid(serverId);
+    info.set_serverid(serverID);
     info.set_hostname(hostname);
     info.set_port(portNo);
     info.set_type("server");
-    info.set_clusterid(clusterId);
+    info.set_clusterid(clusterID);
 
     Confirmation confirmation;
 
@@ -501,10 +501,10 @@ int main(int argc, char** argv) {
     while ((opt = getopt(argc, argv, "c:s:h:k:p:")) != -1) {
         switch (opt) {
             case 'c':
-                clusterId = atoi(optarg);
+                clusterID = atoi(optarg);
                 break;
             case 's':
-                serverId = atoi(optarg);
+                serverID = atoi(optarg);
                 break;
             case 'h':
                 coordIP = optarg;
@@ -524,8 +524,8 @@ int main(int argc, char** argv) {
     google::InitGoogleLogging(logFilename.c_str());
     log(INFO, "Logging initialized");
 
-    clusterDir = "cluster_" + to_string(clusterId) + "/";
-    serverDir = clusterDir + to_string(serverId) + "/";
+    clusterDir = "cluster_" + to_string(clusterID) + "/";
+    serverDir = clusterDir + to_string(serverID) + "/";
     allUsersFile = serverDir + "all_users.txt";
 
     {
