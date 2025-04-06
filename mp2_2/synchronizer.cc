@@ -469,12 +469,11 @@ void publishMessages(string port) {
 
     while (true) {
         if (isMaster) {
-            /*cout << "Producing message" << endl;*/
             producer.publishUserList();
             producer.publishUserRelations();
             producer.publishTimelines();
         }
-        sleep_for(5s);
+        sleep_for(2s);
     }
 }
 

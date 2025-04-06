@@ -80,19 +80,16 @@ class CoordServiceImpl final : public CoordService::Service {
             "Received heartbeat from " + type + " " +
             to_string(serverID) + " in cluster " + to_string(clusterID));
 
-        lock_guard<mutex> lock(synchronizerMtx);
-        lock_guard<mutex> lock2(routingTableMtx);
         zNode* server = findServer(clusterID, serverID, type);
 
         if (!server) { 
             // Register server after its first heartbeat
-            zNode* newserver = new zNode(
-                serverID,
-                request->hostname(),
-                request->port(),
-                request->type(),
-                getTimeNow(),
-                false);
+            zNode* newserver = new zNode(serverID,
+                                         request->hostname(),
+                                         request->port(),
+                                         request->type(),
+                                         getTimeNow(),
+                                         false);
 
             if (newserver->type == SERVER) {
                 routingTable[clusterID - 1].push_back(newserver);
@@ -239,6 +236,8 @@ int main(int argc, char** argv) {
 
 zNode* findServer(int clusterID, int serverID, string type) {
     table servers = type == SERVER ? routingTable : synchronizers;
+    lock_guard<mutex> lock(synchronizerMtx);
+    lock_guard<mutex> lock2(routingTableMtx);
     for (auto& node : servers[clusterID - 1])
         if (node->serverID == serverID) return node;
     return nullptr;
@@ -259,9 +258,7 @@ void checkHeartbeat() {
                 for (auto& s : c) {
                     if (difftime(getTimeNow(), s->last_heartbeat) > 10) {
                         log(WARNING, "Missed heartbeat from server " + to_string(s->serverID));
-                        if (!s->missed_heartbeat) {
-                            s->missed_heartbeat = true;
-                        }
+                        s->missed_heartbeat = true;
                     }
                 }
             }
@@ -272,9 +269,7 @@ void checkHeartbeat() {
                 for (auto& s : c) {
                     if (difftime(getTimeNow(), s->last_heartbeat) > 10) {
                         log(WARNING, "Missed heartbeat from synchronizer " + to_string(s->serverID));
-                        if (!s->missed_heartbeat) {
-                            s->missed_heartbeat = true;
-                        }
+                        s->missed_heartbeat = true;
                     }
                 }
             }
@@ -283,7 +278,7 @@ void checkHeartbeat() {
 }
 
 bool zNode::isActive() {
-    return !missed_heartbeat || difftime(getTimeNow(), last_heartbeat) < 10;
+    return !missed_heartbeat;
 }
 
 zNode* getMasterServer(int clusterID) {
