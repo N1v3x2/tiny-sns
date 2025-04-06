@@ -1,8 +1,6 @@
+#include "file_utils.h"
 #include <algorithm>
 #include <fcntl.h>
-#include "file_utils.h"
-
-#include <iostream>
 
 string SemGuard::makeName(const string& filename) {
     string semName = filename;

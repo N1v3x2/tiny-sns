@@ -1,49 +1,49 @@
 #include <cstdio>
 #include <ctime>
 
-#include <glog/logging.h>
-#include <google/protobuf/timestamp.pb.h>
-#include <google/protobuf/duration.pb.h>
 #include <chrono>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <vector>
-#include <iostream>
-#include <memory>
-#include <string>
-#include <thread>
-#include <mutex>
-#include <stdlib.h>
-#include <unistd.h>
+#include <glog/logging.h>
+#include <google/protobuf/duration.pb.h>
+#include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <stdlib.h>
+#include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
 
 #include "coordinator.grpc.pb.h"
 #include "coordinator.pb.h"
 
-#define log(severity, msg) \
-    LOG(severity) << msg;  \
+#define log(severity, msg)                                                     \
+    LOG(severity) << msg;                                                      \
     google::FlushLogFiles(google::severity);
 
 using namespace std::chrono_literals;
 using namespace std::this_thread;
 
+using csce438::Confirmation;
+using csce438::CoordService;
+using csce438::ID;
+using csce438::ServerInfo;
+using csce438::ServerList;
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
-using csce438::CoordService;
-using csce438::ServerInfo;
-using csce438::ServerList;
-using csce438::Confirmation;
-using csce438::ID;
-using std::vector;
-using std::string;
-using std::to_string;
 using std::cout;
 using std::endl;
-using std::mutex;
 using std::lock_guard;
+using std::mutex;
+using std::string;
+using std::to_string;
+using std::vector;
 
 struct zNode {
     int serverID;
@@ -52,9 +52,9 @@ struct zNode {
     string type;
     time_t last_heartbeat;
     bool missed_heartbeat;
-    zNode(int s, string h, string p, string t, time_t l, bool m) :
-        serverID(s), hostname(h), port(p), type(t), last_heartbeat(l), missed_heartbeat(m)
-    {}
+    zNode(int s, string h, string p, string t, time_t l, bool m)
+        : serverID(s), hostname(h), port(p), type(t), last_heartbeat(l),
+          missed_heartbeat(m) {}
     bool isActive();
 };
 
@@ -63,7 +63,7 @@ using table = vector<vector<zNode*>>;
 table routingTable(3, vector<zNode*>()), synchronizers(3, vector<zNode*>());
 mutex routingTableMtx, synchronizerMtx;
 
-zNode* findServer(int clusterID, int serverID, string type); 
+zNode* findServer(int clusterID, int serverID, string type);
 zNode* getMasterServer(int clusterID);
 zNode* getSlaveServer(int clusterID);
 std::time_t getTimeNow();
@@ -71,25 +71,25 @@ void checkHeartbeat();
 
 class CoordServiceImpl final : public CoordService::Service {
 
-    Status Heartbeat(ServerContext* context, const ServerInfo* request, Confirmation* reply) override {
+    Status Heartbeat(ServerContext* context, const ServerInfo* request,
+                     Confirmation* reply) override {
         int serverID = request->serverid();
         int clusterID = request->clusterid();
         string type = request->type();
 
-        log(INFO,
-            "Received heartbeat from " + type + " " +
-            to_string(serverID) + " in cluster " + to_string(clusterID));
+        log(INFO, "Received heartbeat from " + type + " " +
+                      to_string(serverID) + " in cluster " +
+                      to_string(clusterID));
 
+        lock_guard<mutex> lock(synchronizerMtx);
+        lock_guard<mutex> lock2(routingTableMtx);
         zNode* server = findServer(clusterID, serverID, type);
 
-        if (!server) { 
+        if (!server) {
             // Register server after its first heartbeat
-            zNode* newserver = new zNode(serverID,
-                                         request->hostname(),
-                                         request->port(),
-                                         request->type(),
-                                         getTimeNow(),
-                                         false);
+            zNode* newserver =
+                new zNode(serverID, request->hostname(), request->port(),
+                          request->type(), getTimeNow(), false);
 
             if (newserver->type == SERVER) {
                 routingTable[clusterID - 1].push_back(newserver);
@@ -108,17 +108,18 @@ class CoordServiceImpl final : public CoordService::Service {
 
         reply->set_status(true);
         log(INFO, "Sending heartbeat confirmation to " + type + " " +
-            to_string(serverID) + " at cluster " + to_string(clusterID));
+                      to_string(serverID) + " at cluster " +
+                      to_string(clusterID));
         return Status::OK;
     }
 
     // Return the master
-    Status GetServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
+    Status GetServer(ServerContext* context, const ID* request,
+                     ServerInfo* reply) override {
         int clientID = request->id();
         int clusterID = (clientID - 1) % 3 + 1;
         log(INFO,
-            "Received `GetServer` request from client " +
-            to_string(clientID));
+            "Received `GetServer` request from client " + to_string(clientID));
 
         // First active server in the routing table is the master
         lock_guard<mutex> lock(routingTableMtx);
@@ -134,9 +135,11 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
-    Status GetSlave(ServerContext* context, const ID* request, ServerInfo* reply) override {
+    Status GetSlave(ServerContext* context, const ID* request,
+                    ServerInfo* reply) override {
         int clusterID = request->id();
-        log(INFO, "Received `GetSlave` request for clutser " + to_string(clusterID));
+        log(INFO,
+            "Received `GetSlave` request for clutser " + to_string(clusterID));
 
         lock_guard<mutex> lock(routingTableMtx);
         zNode* slave = getSlaveServer(clusterID);
@@ -151,7 +154,8 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
-    Status GetFollowerServer(ServerContext* context, const ID* request, ServerInfo* reply) override {
+    Status GetFollowerServer(ServerContext* context, const ID* request,
+                             ServerInfo* reply) override {
         int synchronizerID = request->id();
         int clusterID = (synchronizerID - 1) % 3 + 1;
         log(INFO, "Received `GetFollowerServer` request");
@@ -175,10 +179,12 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
-    Status GetFollowerServers(ServerContext* context, const ID* id, ServerList* reply) override {
+    Status GetFollowerServers(ServerContext* context, const ID* id,
+                              ServerList* reply) override {
         int synchronizerID = id->id();
-        log(INFO, "Received `GetAllFollowerServers` request from synchronizer " +
-            to_string(synchronizerID));
+        log(INFO,
+            "Received `GetAllFollowerServers` request from synchronizer " +
+                to_string(synchronizerID));
         lock_guard<mutex> lock(synchronizerMtx);
         for (auto& cluster : synchronizers) {
             for (auto& synchronizer : cluster) {
@@ -216,13 +222,13 @@ void RunServer(string port_no) {
 int main(int argc, char** argv) {
     string port = "3010";
     int opt = 0;
-    while ((opt = getopt(argc, argv, "p:")) != -1){
-        switch(opt) {
-            case 'p':
-                port = optarg;
-                break;
-            default:
-                std::cerr << "Invalid Command Line Argument\n";
+    while ((opt = getopt(argc, argv, "p:")) != -1) {
+        switch (opt) {
+        case 'p':
+            port = optarg;
+            break;
+        default:
+            std::cerr << "Invalid Command Line Argument\n";
         }
     }
 
@@ -236,15 +242,14 @@ int main(int argc, char** argv) {
 
 zNode* findServer(int clusterID, int serverID, string type) {
     table servers = type == SERVER ? routingTable : synchronizers;
-    lock_guard<mutex> lock(synchronizerMtx);
-    lock_guard<mutex> lock2(routingTableMtx);
     for (auto& node : servers[clusterID - 1])
         if (node->serverID == serverID) return node;
     return nullptr;
 }
 
 std::time_t getTimeNow() {
-    return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    return std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
 }
 
 void checkHeartbeat() {
@@ -257,7 +262,8 @@ void checkHeartbeat() {
             for (auto& c : routingTable) {
                 for (auto& s : c) {
                     if (difftime(getTimeNow(), s->last_heartbeat) > 10) {
-                        log(WARNING, "Missed heartbeat from server " + to_string(s->serverID));
+                        log(WARNING, "Missed heartbeat from server " +
+                                         to_string(s->serverID));
                         s->missed_heartbeat = true;
                     }
                 }
@@ -268,7 +274,8 @@ void checkHeartbeat() {
             for (auto& c : synchronizers) {
                 for (auto& s : c) {
                     if (difftime(getTimeNow(), s->last_heartbeat) > 10) {
-                        log(WARNING, "Missed heartbeat from synchronizer " + to_string(s->serverID));
+                        log(WARNING, "Missed heartbeat from synchronizer " +
+                                         to_string(s->serverID));
                         s->missed_heartbeat = true;
                     }
                 }
@@ -277,9 +284,7 @@ void checkHeartbeat() {
     }
 }
 
-bool zNode::isActive() {
-    return !missed_heartbeat;
-}
+bool zNode::isActive() { return !missed_heartbeat; }
 
 zNode* getMasterServer(int clusterID) {
     for (auto& s : routingTable[clusterID - 1]) {

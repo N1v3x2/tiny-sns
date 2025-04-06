@@ -11,7 +11,8 @@ void IClient::run() {
         std::string cmd = getCommand();
         IReply reply = processCommand(cmd);
         displayCommandReply(cmd, reply);
-        if (reply.grpc_status.ok() && reply.comm_status == SUCCESS && cmd == "TIMELINE") {
+        if (reply.grpc_status.ok() && reply.comm_status == SUCCESS &&
+            cmd == "TIMELINE") {
             std::cout << "Now you are in the timeline" << std::endl;
             processTimeline();
         }
@@ -41,7 +42,8 @@ std::string IClient::getCommand() const {
                 std::cout << "Invalid Input -- No Arguments Given\n";
                 continue;
             }
-            std::string argument = input.substr(index + 1, (input.length() - index));
+            std::string argument =
+                input.substr(index + 1, (input.length() - index));
             input = cmd + " " + argument;
         } else {
             toUpperCase(input);
@@ -55,47 +57,49 @@ std::string IClient::getCommand() const {
     return input;
 }
 
-void IClient::displayCommandReply(const std::string& comm, const IReply& reply) const {
+void IClient::displayCommandReply(const std::string& comm,
+                                  const IReply& reply) const {
     if (reply.grpc_status.ok()) {
         switch (reply.comm_status) {
-            case SUCCESS:
-                std::cout << "Command completed successfully\n";
-                if (comm == "LIST") {
-                    std::cout << "All users: ";
-                    for (std::string room : reply.all_users) {
-                        std::cout << room << ", ";
-                    }
-                    std::cout << "\nFollowers: ";
-                    for (std::string room : reply.followers) {
-                        std::cout << room << ", ";
-                    }
-                    std::cout << std::endl;
+        case SUCCESS:
+            std::cout << "Command completed successfully\n";
+            if (comm == "LIST") {
+                std::cout << "All users: ";
+                for (std::string room : reply.all_users) {
+                    std::cout << room << ", ";
                 }
-                break;
-            case FAILURE_ALREADY_EXISTS:
-                std::cout << "Input username already exists, command failed\n";
-                break;
-            case FAILURE_NOT_EXISTS:
-                std::cout << "Input username does not exists, command failed\n";
-                break;
-            case FAILURE_INVALID_USERNAME:
-                std::cout << "Command failed with invalid username\n";
-                break;
-            case FAILURE_NOT_A_FOLLOWER:
-                std::cout << "Command failed with not a follower\n";
-                break;
-            case FAILURE_INVALID:
-                std::cout << "Command failed with invalid command\n";
-                break;
-            case FAILURE_UNKNOWN:
-                std::cout << "Command failed with unknown reason\n";
-                break;
-            default:
-                std::cout << "Invalid status\n";
-                break;
+                std::cout << "\nFollowers: ";
+                for (std::string room : reply.followers) {
+                    std::cout << room << ", ";
+                }
+                std::cout << std::endl;
+            }
+            break;
+        case FAILURE_ALREADY_EXISTS:
+            std::cout << "Input username already exists, command failed\n";
+            break;
+        case FAILURE_NOT_EXISTS:
+            std::cout << "Input username does not exists, command failed\n";
+            break;
+        case FAILURE_INVALID_USERNAME:
+            std::cout << "Command failed with invalid username\n";
+            break;
+        case FAILURE_NOT_A_FOLLOWER:
+            std::cout << "Command failed with not a follower\n";
+            break;
+        case FAILURE_INVALID:
+            std::cout << "Command failed with invalid command\n";
+            break;
+        case FAILURE_UNKNOWN:
+            std::cout << "Command failed with unknown reason\n";
+            break;
+        default:
+            std::cout << "Invalid status\n";
+            break;
         }
     } else {
-        std::cout << "grpc failed: " << reply.grpc_status.error_message() << std::endl;
+        std::cout << "grpc failed: " << reply.grpc_status.error_message()
+                  << std::endl;
     }
 }
 
@@ -119,12 +123,15 @@ std::string getPostMessage() {
     return message;
 }
 
-void displayPostMessage(const std::string& sender, const std::string& message, std::time_t& time) {
+void displayPostMessage(const std::string& sender, const std::string& message,
+                        std::time_t& time) {
     std::string t_str(std::ctime(&time));
     t_str[t_str.size() - 1] = '\0';
     std::cout << sender << " (" << t_str << ") >> " << message << std::endl;
 }
 
-void displayReConnectionMessage(const std::string& host, const std::string& port) {
-    std::cout << "Reconnecting to " << host << ":" << port << "..." << std::endl;
+void displayReConnectionMessage(const std::string& host,
+                                const std::string& port) {
+    std::cout << "Reconnecting to " << host << ":" << port << "..."
+              << std::endl;
 }

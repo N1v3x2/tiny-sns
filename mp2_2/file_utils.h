@@ -9,7 +9,8 @@ using std::string;
 class SemGuard {
     sem_t* sem;
     string makeName(const string& filename);
-public:
+
+  public:
     SemGuard(const string& name);
     ~SemGuard();
 };

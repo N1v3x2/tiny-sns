@@ -4,57 +4,57 @@
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 
-#include <sys/fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <semaphore.h>
 #include <ctime>
-#include <time.h>
-#include <iomanip>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
-#include <memory>
-#include <string>
-#include <thread>
 #include <map>
-#define log(severity, msg) \
-    LOG(severity) << msg;  \
+#include <memory>
+#include <semaphore.h>
+#include <stdlib.h>
+#include <string>
+#include <sys/fcntl.h>
+#include <sys/stat.h>
+#include <thread>
+#include <time.h>
+#include <unistd.h>
+#define log(severity, msg)                                                     \
+    LOG(severity) << msg;                                                      \
     google::FlushLogFiles(google::severity);
 
-#include "sns.grpc.pb.h"
 #include "coordinator.grpc.pb.h"
 #include "file_utils.h"
+#include "sns.grpc.pb.h"
 
 using namespace std::chrono_literals;
 using namespace std::this_thread;
 
+using csce438::Confirmation;
+using csce438::CoordService;
+using csce438::ID;
 using csce438::ListReply;
 using csce438::Message;
 using csce438::Reply;
 using csce438::Request;
-using csce438::SNSService;
 using csce438::ServerInfo;
-using csce438::Confirmation;
-using csce438::CoordService;
-using csce438::ID;
+using csce438::SNSService;
+using google::protobuf::Timestamp;
+using google::protobuf::util::TimeUtil;
+using grpc::ClientContext;
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerReaderWriter;
 using grpc::Status;
-using grpc::ClientContext;
-using google::protobuf::Timestamp;
-using google::protobuf::util::TimeUtil;
-using std::string;
-using std::to_string;
-using std::vector;
-using std::map;
-using std::ifstream;
-using std::ofstream;
-using std::unique_ptr;
 using std::cout;
 using std::endl;
+using std::ifstream;
+using std::map;
+using std::ofstream;
+using std::string;
+using std::to_string;
+using std::unique_ptr;
+using std::vector;
 
 int serverID, clusterID;
 string clusterDir, serverDir, allUsersFile;
@@ -80,14 +80,14 @@ unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port);
 Message MakeMessage(const string& username, const string& msg);
 
 class SNSServiceImpl final : public SNSService::Service {
-    Status List(ServerContext* context, const Request* request, ListReply* response) override {
+    Status List(ServerContext* context, const Request* request,
+                ListReply* response) override {
         string username = request->username();
         log(INFO, "Received `List` request " + username);
 
         std::lock_guard<std::mutex> lock(clientMtx);
 
-        for (auto& [uname, _] : clientDB)
-            response->add_all_users(uname);
+        for (auto& [uname, _] : clientDB) response->add_all_users(uname);
 
         Client* client = clientDB[username];
         for (auto& [follower_uname, _] : client->followers)
@@ -97,7 +97,8 @@ class SNSServiceImpl final : public SNSService::Service {
         return Status::OK;
     }
 
-    Status Follow(ServerContext* context, const Request* request, Reply* response) override {
+    Status Follow(ServerContext* context, const Request* request,
+                  Reply* response) override {
         string username = request->username();
         log(INFO, "Received `Follow` request from client " + username);
 
@@ -118,7 +119,8 @@ class SNSServiceImpl final : public SNSService::Service {
             client = clientDB[username];
             Client* clientToFollow = clientDB[toFollow];
 
-            if (client->following.count(toFollow) || *client == *clientToFollow) {
+            if (client->following.count(toFollow) ||
+                *client == *clientToFollow) {
                 response->set_msg("Input username already exists");
                 return Status::OK;
             }
@@ -144,11 +146,13 @@ class SNSServiceImpl final : public SNSService::Service {
 
         // Master: replicate new user to slave
         if (isMaster) {
-            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub(
-                slaveInfo.hostname(), slaveInfo.port());
+            unique_ptr<SNSService::Stub> slaveStub =
+                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
 
             ClientContext masterSlaveCtx;
-            Request req; req.set_username(username); req.add_arguments(toFollow);
+            Request req;
+            req.set_username(username);
+            req.add_arguments(toFollow);
             Reply rep;
             log(INFO, "Master: replicating Follow state to slave");
             slaveStub->Follow(&masterSlaveCtx, req, &rep);
@@ -157,9 +161,9 @@ class SNSServiceImpl final : public SNSService::Service {
         return Status::OK;
     }
 
-    /* Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
-        string username = request->username();
-        log(INFO, "Received `UnFollow` request from client " + username);
+    /* Status UnFollow(ServerContext* context, const Request* request, Reply*
+    reply) override { string username = request->username(); log(INFO, "Received
+    `UnFollow` request from client " + username);
 
         if (request->arguments_size() < 1) {
             reply->set_msg("Invalid command");
@@ -183,7 +187,8 @@ class SNSServiceImpl final : public SNSService::Service {
     } */
 
     // RPC Login
-    Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+    Status Login(ServerContext* context, const Request* request,
+                 Reply* reply) override {
         string username = request->username();
         log(INFO, "Received `Login` request from client " + username);
 
@@ -202,9 +207,12 @@ class SNSServiceImpl final : public SNSService::Service {
             client->followingFile = serverDir + username + "_following.txt";
             clientDB[username] = client;
 
-            ofstream fs(client->timelineFile); fs.close();
-            fs.open(client->followingFile); fs.close();
-            fs.open(client->followerFile); fs.close();
+            ofstream fs(client->timelineFile);
+            fs.close();
+            fs.open(client->followingFile);
+            fs.close();
+            fs.open(client->followerFile);
+            fs.close();
 
             // Add user to all_users.txt
             SemGuard fileLock(allUsersFile);
@@ -217,11 +225,12 @@ class SNSServiceImpl final : public SNSService::Service {
 
         // Master: replicate to slave
         if (isMaster) {
-            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub(
-                slaveInfo.hostname(), slaveInfo.port());
+            unique_ptr<SNSService::Stub> slave_stub =
+                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
 
             ClientContext masterSlaveCtx;
-            Request req; req.set_username(username);
+            Request req;
+            req.set_username(username);
             Reply rep;
             log(INFO, "Master: replicating Login state to slave");
             slave_stub->Login(&masterSlaveCtx, req, &rep);
@@ -263,9 +272,9 @@ class SNSServiceImpl final : public SNSService::Service {
                     fs.open(client->timelineFile);
 
                     while (fs.peek() != ifstream::traits_type::eof()) {
-                        fs >> fill >> std::ws >> std::get_time(&postTime, "%a %b %d %H:%M:%S %Y")
-                           >> fill >> postUser
-                           >> fill >> std::ws;
+                        fs >> fill >> std::ws >>
+                            std::get_time(&postTime, "%a %b %d %H:%M:%S %Y") >>
+                            fill >> postUser >> fill >> std::ws;
                         std::getline(fs, postContent);
                         std::getline(fs, dummy);
 
@@ -284,13 +293,11 @@ class SNSServiceImpl final : public SNSService::Service {
                 }
 
                 if (!msgs.empty()) {
-                    log(INFO,
-                        "User " +
-                        client->username +
-                        " has unread posts; sending latest posts...");
-                    for (auto& msg : msgs)
-                        stream->Write(msg);
-                    lastRead = TimeUtil::TimestampToTimeT(msgs.back().timestamp());
+                    log(INFO, "User " + client->username +
+                                  " has unread posts; sending latest posts...");
+                    for (auto& msg : msgs) stream->Write(msg);
+                    lastRead =
+                        TimeUtil::TimestampToTimeT(msgs.back().timestamp());
                 }
 
                 sleep_for(5s);
@@ -305,8 +312,8 @@ class SNSServiceImpl final : public SNSService::Service {
 
         // (Master) Set up slave replication
         if (isMaster) {
-            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub(
-                slaveInfo.hostname(), slaveInfo.port());
+            unique_ptr<SNSService::Stub> slaveStub =
+                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
             slaveStream = slaveStub->Timeline(&masterSlaveCtx);
             log(INFO, "Master: establishing timeline connection to slave");
             string connMsg = "Timeline";
@@ -316,7 +323,8 @@ class SNSServiceImpl final : public SNSService::Service {
         ofstream fs;
         while (stream->Read(&msg)) {
             // Write posts to all followers
-            log(INFO, "User " + client->username + " just posted; sending post to followers...");
+            log(INFO, "User " + client->username +
+                          " just posted; sending post to followers...");
 
             std::lock_guard<std::mutex> lock(clientMtx);
             for (auto& [followerUname, follower] : client->followers) {
@@ -326,8 +334,7 @@ class SNSServiceImpl final : public SNSService::Service {
                     std::tm* t = gmtime(&curr_time);
                     fs.clear();
                     fs.open(follower->timelineFile, std::ios::app);
-                    fs << "T " << asctime(t)
-                       << "U " << username << '\n'
+                    fs << "T " << asctime(t) << "U " << username << '\n'
                        << "W " << msg.msg() << '\n';
                     fs.close();
                 }
@@ -346,7 +353,8 @@ class SNSServiceImpl final : public SNSService::Service {
 
 ServerInfo GetSlaveInfo() {
     ClientContext masterSlaveCtx;
-    ID id; id.set_id(clusterID);
+    ID id;
+    id.set_id(clusterID);
     ServerInfo slaveInfo;
     coordStub->GetSlave(&masterSlaveCtx, id, &slaveInfo);
     return slaveInfo;
@@ -370,11 +378,7 @@ Message MakeMessage(const string& username, const string& msg) {
 }
 
 // Background heartbeat thread function
-void Heartbeat(
-    string coordIP,
-    string coordPort,
-    string portNo)
-{
+void Heartbeat(string coordIP, string coordPort, string portNo) {
     const string hostname = "0.0.0.0";
     string coord_address = coordIP + ":" + coordPort;
 
@@ -391,7 +395,8 @@ void Heartbeat(
     while (true) {
         ClientContext context;
         log(INFO, "Sending heartbeat to coordinator");
-        grpc::Status status = coordStub->Heartbeat(&context, info, &confirmation);
+        grpc::Status status =
+            coordStub->Heartbeat(&context, info, &confirmation);
         if (!status.ok() || !confirmation.status()) {
             log(ERROR, "Heartbeat did not receive reply from coordinator");
             std::terminate();
@@ -416,16 +421,22 @@ void UpdateClientDB() {
             while (fs.peek() != ifstream::traits_type::eof()) {
                 getline(fs, username);
                 if (!clientDB.count(username)) {
-                    Client *client = new Client(username);
-                    client->timelineFile = serverDir + username + "_timeline.txt";
-                    client->followerFile = serverDir + username + "_followers.txt";
-                    client->followingFile = serverDir + username + "_following.txt";
+                    Client* client = new Client(username);
+                    client->timelineFile =
+                        serverDir + username + "_timeline.txt";
+                    client->followerFile =
+                        serverDir + username + "_followers.txt";
+                    client->followingFile =
+                        serverDir + username + "_following.txt";
                     clientDB[username] = client;
 
-                    ofstream newFS(client->timelineFile); newFS.close();
-                    newFS.open(client->followerFile); newFS.close();
-                    newFS.open(client->followingFile); newFS.close();
-                } 
+                    ofstream newFS(client->timelineFile);
+                    newFS.close();
+                    newFS.open(client->followerFile);
+                    newFS.close();
+                    newFS.open(client->followingFile);
+                    newFS.close();
+                }
             }
             fs.close();
         }
@@ -458,11 +469,7 @@ void UpdateClientDB() {
     }
 }
 
-void RunServer(
-    string coordIP,
-    string coordPort,
-    string portNo)
-{
+void RunServer(string coordIP, string coordPort, string portNo) {
     const string hostname = "0.0.0.0";
     string serverAddr = hostname + ":" + portNo;
     SNSServiceImpl service;
@@ -493,30 +500,31 @@ int main(int argc, char** argv) {
 
     if (argc < 6) {
         cout << "Expected 6 args, got " << argc << '\n';
-        cout << "Usage: tsd -c <clusterId> -s <serverId> -h <coordinatorIP> -k <coordinatorPort> -p <portNum>\n";
+        cout << "Usage: tsd -c <clusterId> -s <serverId> -h <coordinatorIP> -k "
+                "<coordinatorPort> -p <portNum>\n";
         return 0;
     }
 
     int opt = 0;
     while ((opt = getopt(argc, argv, "c:s:h:k:p:")) != -1) {
         switch (opt) {
-            case 'c':
-                clusterID = atoi(optarg);
-                break;
-            case 's':
-                serverID = atoi(optarg);
-                break;
-            case 'h':
-                coordIP = optarg;
-                break;
-            case 'k':
-                coordPort = optarg;
-                break;
-            case 'p':
-                port = optarg;
-                break;
-            default:
-                std::cerr << "Invalid Command Line Argument\n";
+        case 'c':
+            clusterID = atoi(optarg);
+            break;
+        case 's':
+            serverID = atoi(optarg);
+            break;
+        case 'h':
+            coordIP = optarg;
+            break;
+        case 'k':
+            coordPort = optarg;
+            break;
+        case 'p':
+            port = optarg;
+            break;
+        default:
+            std::cerr << "Invalid Command Line Argument\n";
         }
     }
 
@@ -532,7 +540,8 @@ int main(int argc, char** argv) {
         SemGuard lock(allUsersFile);
         mkdir(clusterDir.data(), 0777);
         mkdir(serverDir.data(), 0777);
-        ofstream fs(allUsersFile); fs.close();
+        ofstream fs(allUsersFile);
+        fs.close();
     }
 
     RunServer(coordIP, coordPort, port);
