@@ -1,54 +1,57 @@
 #include "client.h"
 
+using std::cout;
+using std::endl;
+using std::string;
+
 void IClient::run() {
     int ret = connectTo();
     if (ret < 0) {
-        std::cout << "connection failed: " << ret << std::endl;
+        cout << "connection failed: " << ret << endl;
         exit(1);
     }
     displayTitle();
     while (1) {
-        std::string cmd = getCommand();
+        string cmd = getCommand();
         IReply reply = processCommand(cmd);
         displayCommandReply(cmd, reply);
         if (reply.grpc_status.ok() && reply.comm_status == SUCCESS &&
             cmd == "TIMELINE") {
-            std::cout << "Now you are in the timeline" << std::endl;
+            cout << "Now you are in the timeline" << endl;
             processTimeline();
         }
     }
 }
 
 void IClient::displayTitle() const {
-    std::cout << "\n========= TINY SNS CLIENT =========\n";
-    std::cout << " Command Lists and Format:\n";
-    std::cout << " FOLLOW <username>\n";
-    std::cout << " UNFOLLOW <username>\n";
-    std::cout << " LIST\n";
-    std::cout << " TIMELINE\n";
-    std::cout << "=====================================\n";
+    cout << "\n========= TINY SNS CLIENT =========\n";
+    cout << " Command Lists and Format:\n";
+    cout << " FOLLOW <username>\n";
+    cout << " UNFOLLOW <username>\n";
+    cout << " LIST\n";
+    cout << " TIMELINE\n";
+    cout << "=====================================\n";
 }
 
-std::string IClient::getCommand() const {
-    std::string input;
+string IClient::getCommand() const {
+    string input;
     while (1) {
-        std::cout << "Cmd> ";
+        cout << "Cmd> ";
         std::getline(std::cin, input);
         std::size_t index = input.find_first_of(" ");
-        if (index != std::string::npos) {
-            std::string cmd = input.substr(0, index);
+        if (index != string::npos) {
+            string cmd = input.substr(0, index);
             toUpperCase(cmd);
             if (input.length() == index + 1) {
-                std::cout << "Invalid Input -- No Arguments Given\n";
+                cout << "Invalid Input -- No Arguments Given\n";
                 continue;
             }
-            std::string argument =
-                input.substr(index + 1, (input.length() - index));
+            string argument = input.substr(index + 1, (input.length() - index));
             input = cmd + " " + argument;
         } else {
             toUpperCase(input);
             if (input != "LIST" && input != "TIMELINE") {
-                std::cout << "Invalid Command\n";
+                cout << "Invalid Command\n";
                 continue;
             }
         }
@@ -57,81 +60,74 @@ std::string IClient::getCommand() const {
     return input;
 }
 
-void IClient::displayCommandReply(const std::string& comm,
+void IClient::displayCommandReply(const string& comm,
                                   const IReply& reply) const {
     if (reply.grpc_status.ok()) {
         switch (reply.comm_status) {
         case SUCCESS:
-            std::cout << "Command completed successfully\n";
+            cout << "Command completed successfully\n";
             if (comm == "LIST") {
-                std::cout << "All users: ";
-                for (std::string room : reply.all_users) {
-                    std::cout << room << ", ";
-                }
-                std::cout << "\nFollowers: ";
-                for (std::string room : reply.followers) {
-                    std::cout << room << ", ";
-                }
-                std::cout << std::endl;
+                cout << "All users: ";
+                for (string room : reply.all_users) { cout << room << ", "; }
+                cout << "\nFollowers: ";
+                for (string room : reply.followers) { cout << room << ", "; }
+                cout << endl;
             }
             break;
         case FAILURE_ALREADY_EXISTS:
-            std::cout << "Input username already exists, command failed\n";
+            cout << "Input username already exists, command failed\n";
             break;
         case FAILURE_NOT_EXISTS:
-            std::cout << "Input username does not exists, command failed\n";
+            cout << "Input username does not exists, command failed\n";
             break;
         case FAILURE_INVALID_USERNAME:
-            std::cout << "Command failed with invalid username\n";
+            cout << "Command failed with invalid username\n";
             break;
         case FAILURE_NOT_A_FOLLOWER:
-            std::cout << "Command failed with not a follower\n";
+            cout << "Command failed with not a follower\n";
             break;
         case FAILURE_INVALID:
-            std::cout << "Command failed with invalid command\n";
+            cout << "Command failed with invalid command\n";
             break;
         case FAILURE_UNKNOWN:
-            std::cout << "Command failed with unknown reason\n";
+            cout << "Command failed with unknown reason\n";
             break;
         default:
-            std::cout << "Invalid status\n";
+            cout << "Invalid status\n";
             break;
         }
     } else {
-        std::cout << "grpc failed: " << reply.grpc_status.error_message()
-                  << std::endl;
+        cout << "grpc failed: " << reply.grpc_status.error_message() << endl;
     }
 }
 
-void IClient::toUpperCase(std::string& str) const {
+void IClient::toUpperCase(string& str) const {
     std::locale loc;
-    for (std::string::size_type i = 0; i < str.size(); i++)
+    for (string::size_type i = 0; i < str.size(); i++)
         str[i] = toupper(str[i], loc);
 }
 
 /*
  * get/displayPostMessage functions will be called in chatmode
  */
-std::string getPostMessage() {
+string getPostMessage() {
     char buf[MAX_DATA];
     while (1) {
         fgets(buf, MAX_DATA, stdin);
         if (buf[0] != '\n') break;
     }
 
-    std::string message(buf);
+    string message(buf);
     return message;
 }
 
-void displayPostMessage(const std::string& sender, const std::string& message,
+void displayPostMessage(const string& sender, const string& message,
                         std::time_t& time) {
-    std::string t_str(std::ctime(&time));
+    string t_str(std::ctime(&time));
     t_str[t_str.size() - 1] = '\0';
-    std::cout << sender << " (" << t_str << ") >> " << message << std::endl;
+    cout << sender << " (" << t_str << ") >> " << message << endl;
 }
 
-void displayReConnectionMessage(const std::string& host,
-                                const std::string& port) {
-    std::cout << "Reconnecting to " << host << ":" << port << "..."
-              << std::endl;
+void displayReConnectionMessage(const string& host, const string& port) {
+    cout << "Reconnecting to " << host << ":" << port << "..." << endl;
 }

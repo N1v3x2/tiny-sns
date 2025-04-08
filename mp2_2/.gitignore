@@ -1,3 +1,7 @@
 cluster_*/
 *.grpc.*
 *.o
+tsc
+tsd
+synchronizer
+coordinator

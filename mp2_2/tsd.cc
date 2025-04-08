@@ -5,6 +5,7 @@
 #include <grpc++/grpc++.h>
 
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -28,6 +29,7 @@
 
 using namespace std::chrono_literals;
 using namespace std::this_thread;
+using namespace std::filesystem;
 
 using csce438::Confirmation;
 using csce438::CoordService;
@@ -49,31 +51,39 @@ using grpc::Status;
 using std::cout;
 using std::endl;
 using std::ifstream;
+using std::lock_guard;
 using std::map;
+using std::mutex;
 using std::ofstream;
+using std::shared_ptr;
 using std::string;
+using std::thread;
 using std::to_string;
 using std::unique_ptr;
 using std::vector;
 
+struct Client;
+using client_ptr = shared_ptr<Client>;
+
 int serverID, clusterID;
-string clusterDir, serverDir, allUsersFile;
+path dirPrefix, allUsersFile;
 unique_ptr<CoordService::Stub> coordStub;
+map<string, client_ptr> clientDB;
+mutex clientMtx;
 
 struct Client {
     string username;
-    string timelineFile;
-    string followerFile;
-    string followingFile;
-    map<string, Client*> followers, following;
+    map<string, client_ptr> followers, following;
     Client(const string& uname) : username(uname) {}
     bool operator==(const Client& c1) const {
         return (username == c1.username);
     }
+    path getTimelineFile() { return dirPrefix / (username + "_timeline.txt"); }
+    path getFollowerFile() { return dirPrefix / (username + "_followers.txt"); }
+    path getFollowingFile() {
+        return dirPrefix / (username + "_following.txt");
+    }
 };
-
-std::mutex clientMtx;
-map<string, Client*> clientDB;
 
 ServerInfo GetSlaveInfo();
 unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port);
@@ -85,13 +95,15 @@ class SNSServiceImpl final : public SNSService::Service {
         string username = request->username();
         log(INFO, "Received `List` request " + username);
 
-        std::lock_guard<std::mutex> lock(clientMtx);
+        lock_guard<mutex> lock(clientMtx);
+        for (auto& [uname, _] : clientDB) {
+            response->add_all_users(uname);
+        }
 
-        for (auto& [uname, _] : clientDB) response->add_all_users(uname);
-
-        Client* client = clientDB[username];
-        for (auto& [follower_uname, _] : client->followers)
+        client_ptr client = clientDB[username];
+        for (auto& [follower_uname, _] : client->followers) {
             response->add_followers(follower_uname);
+        }
 
         log(INFO, "Sending `List` to client...");
         return Status::OK;
@@ -108,16 +120,15 @@ class SNSServiceImpl final : public SNSService::Service {
         }
         string toFollow = request->arguments(0);
 
-        Client* client = nullptr;
+        client_ptr client = nullptr, clientToFollow = nullptr;
         {
-            std::lock_guard<std::mutex> lock(clientMtx);
-
+            lock_guard<mutex> lock(clientMtx);
             if (!clientDB.count(toFollow)) {
                 response->set_msg("Invalid username");
                 return Status::OK;
             }
             client = clientDB[username];
-            Client* clientToFollow = clientDB[toFollow];
+            clientToFollow = clientDB[toFollow];
 
             if (client->following.count(toFollow) ||
                 *client == *clientToFollow) {
@@ -129,26 +140,24 @@ class SNSServiceImpl final : public SNSService::Service {
             clientToFollow->followers[username] = client;
         }
         {
-            SemGuard followingLock(client->followingFile);
-            ofstream fs(serverDir + username + "_following.txt", std::ios::app);
+            const string file = client->getFollowingFile();
+            SemGuard fileLock(file);
+            ofstream fs(file);
             fs << toFollow << endl;
-            fs.close();
-
-            SemGuard followerLock(client->followerFile);
-            fs.clear();
-            fs.open(serverDir + toFollow + "_followers.txt", std::ios::app);
+        }
+        {
+            const string file = clientToFollow->getFollowerFile();
+            SemGuard fileLock(file);
+            ofstream fs(file);
             fs << username << endl;
-            fs.close();
         }
 
         ServerInfo slaveInfo = GetSlaveInfo();
         bool isMaster = slaveInfo.serverid() != serverID;
 
-        // Master: replicate new user to slave
         if (isMaster) {
             unique_ptr<SNSService::Stub> slaveStub =
                 GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
-
             ClientContext masterSlaveCtx;
             Request req;
             req.set_username(username);
@@ -161,16 +170,16 @@ class SNSServiceImpl final : public SNSService::Service {
         return Status::OK;
     }
 
-    /* Status UnFollow(ServerContext* context, const Request* request, Reply*
-    reply) override { string username = request->username(); log(INFO, "Received
-    `UnFollow` request from client " + username);
+    /* Status UnFollow(ServerContext* context, const Request* request,
+    Reply* reply) override { string username = request->username();
+    log(INFO, "Received `UnFollow` request from client " + username);
 
         if (request->arguments_size() < 1) {
             reply->set_msg("Invalid command");
             return Status::OK;
         }
 
-        Client* client = client_db[username];
+        client_ptr client = client_db[username];
 
         string username2 = request->arguments(0);
         if (!client->client_following.count(username2)) {
@@ -180,38 +189,31 @@ class SNSServiceImpl final : public SNSService::Service {
 
         client->client_following.erase(username2);
 
-        Client* to_unfollow = client_db[username2];
+        client_ptr to_unfollow = client_db[username2];
         to_unfollow->client_followers.erase(username);
 
         return Status::OK;
     } */
 
-    // RPC Login
     Status Login(ServerContext* context, const Request* request,
                  Reply* reply) override {
         string username = request->username();
         log(INFO, "Received `Login` request from client " + username);
 
         {
-            std::lock_guard<std::mutex> lock(clientMtx);
-
-            // Check whether the user already exists
+            lock_guard<mutex> lock(clientMtx);
             if (clientDB.count(username)) {
-                reply->set_msg("Username already exists");
                 return Status::OK;
             }
 
-            Client* client = new Client(username);
-            client->timelineFile = serverDir + username + "_timeline.txt";
-            client->followerFile = serverDir + username + "_followers.txt";
-            client->followingFile = serverDir + username + "_following.txt";
+            client_ptr client = std::make_shared<Client>(username);
             clientDB[username] = client;
 
-            ofstream fs(client->timelineFile);
+            ofstream fs(client->getTimelineFile());
             fs.close();
-            fs.open(client->followingFile);
+            fs.open(client->getFollowingFile());
             fs.close();
-            fs.open(client->followerFile);
+            fs.open(client->getFollowerFile());
             fs.close();
 
             // Add user to all_users.txt
@@ -242,7 +244,7 @@ class SNSServiceImpl final : public SNSService::Service {
     Status Timeline(ServerContext* context,
                     ServerReaderWriter<Message, Message>* stream) override {
         Message msg;
-        Client* client = nullptr;
+        client_ptr client = nullptr;
         string username;
 
         // Set the current user based on the first message received
@@ -256,7 +258,7 @@ class SNSServiceImpl final : public SNSService::Service {
         log(INFO, "Received `Timeline` request from client " + username);
 
         // Use background thread to monitor changes to the user's file
-        std::thread monitorTimeline([stream, client, username]() {
+        thread monitorTimeline([stream, client, username]() {
             ifstream fs;
             char fill;
             std::tm postTime{};
@@ -267,19 +269,23 @@ class SNSServiceImpl final : public SNSService::Service {
             while (true) {
                 vector<Message> msgs;
                 {
-                    SemGuard lock(client->timelineFile);
+                    const string file = client->getTimelineFile();
+                    SemGuard lock(file);
                     fs.clear();
-                    fs.open(client->timelineFile);
+                    fs.open(file);
 
                     while (fs.peek() != ifstream::traits_type::eof()) {
                         fs >> fill >> std::ws >>
-                            std::get_time(&postTime, "%a %b %d %H:%M:%S %Y") >>
+                            std::get_time(&postTime, "%a %b %d %H:%M:%S "
+                                                     "%Y") >>
                             fill >> postUser >> fill >> std::ws;
                         std::getline(fs, postContent);
                         std::getline(fs, dummy);
 
-                        // Only read new posts (since last read)
-                        if (std::mktime(&postTime) <= lastRead) continue;
+                        // Only read new posts (since
+                        // last read)
+                        if (std::mktime(&postTime) <= lastRead)
+                            continue;
 
                         Timestamp* timestamp = new Timestamp();
                         timestamp->set_seconds(std::mktime(&postTime));
@@ -294,8 +300,10 @@ class SNSServiceImpl final : public SNSService::Service {
 
                 if (!msgs.empty()) {
                     log(INFO, "User " + client->username +
-                                  " has unread posts; sending latest posts...");
-                    for (auto& msg : msgs) stream->Write(msg);
+                                  " has unread posts; sending "
+                                  "latest posts...");
+                    for (auto& msg : msgs)
+                        stream->Write(msg);
                     lastRead =
                         TimeUtil::TimestampToTimeT(msgs.back().timestamp());
                 }
@@ -306,16 +314,15 @@ class SNSServiceImpl final : public SNSService::Service {
 
         ServerInfo slaveInfo = GetSlaveInfo();
         bool isMaster = slaveInfo.serverid() != serverID;
-
         std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
         ClientContext masterSlaveCtx;
 
-        // (Master) Set up slave replication
         if (isMaster) {
             unique_ptr<SNSService::Stub> slaveStub =
                 GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
             slaveStream = slaveStub->Timeline(&masterSlaveCtx);
-            log(INFO, "Master: establishing timeline connection to slave");
+            log(INFO, "Master: establishing timeline connection to "
+                      "slave");
             string connMsg = "Timeline";
             slaveStream->Write(MakeMessage(username, connMsg));
         }
@@ -326,14 +333,15 @@ class SNSServiceImpl final : public SNSService::Service {
             log(INFO, "User " + client->username +
                           " just posted; sending post to followers...");
 
-            std::lock_guard<std::mutex> lock(clientMtx);
+            lock_guard<mutex> lock(clientMtx);
             for (auto& [followerUname, follower] : client->followers) {
                 {
-                    SemGuard fileLock(follower->timelineFile);
+                    const string file = follower->getTimelineFile();
+                    SemGuard fileLock(file);
                     time_t curr_time = time(nullptr);
                     std::tm* t = gmtime(&curr_time);
                     fs.clear();
-                    fs.open(follower->timelineFile, std::ios::app);
+                    fs.open(file, fs.app);
                     fs << "T " << asctime(t) << "U " << username << '\n'
                        << "W " << msg.msg() << '\n';
                     fs.close();
@@ -341,7 +349,8 @@ class SNSServiceImpl final : public SNSService::Service {
 
                 // Master: replicate to slave
                 if (isMaster) {
-                    log(INFO, "Master: replicating timeline post to slave");
+                    log(INFO, "Master: replicating "
+                              "timeline post to slave");
                     slaveStream->Write(msg);
                 }
             }
@@ -407,63 +416,51 @@ void Heartbeat(string coordIP, string coordPort, string portNo) {
 }
 
 void UpdateClientDB() {
-    ifstream fs;
     string username, follower, following;
 
     while (true) {
         sleep_for(3s);
-
-        std::lock_guard<std::mutex> lock(clientMtx);
+        lock_guard<mutex> lock(clientMtx);
         {
             SemGuard fileLock(allUsersFile);
-            fs.clear();
-            fs.open(allUsersFile);
+            ifstream fs(allUsersFile);
             while (fs.peek() != ifstream::traits_type::eof()) {
                 getline(fs, username);
                 if (!clientDB.count(username)) {
-                    Client* client = new Client(username);
-                    client->timelineFile =
-                        serverDir + username + "_timeline.txt";
-                    client->followerFile =
-                        serverDir + username + "_followers.txt";
-                    client->followingFile =
-                        serverDir + username + "_following.txt";
+                    client_ptr client = std::make_shared<Client>(username);
                     clientDB[username] = client;
 
-                    ofstream newFS(client->timelineFile);
+                    ofstream newFS(client->getTimelineFile());
                     newFS.close();
-                    newFS.open(client->followerFile);
+                    newFS.open(client->getFollowingFile());
                     newFS.close();
-                    newFS.open(client->followingFile);
+                    newFS.open(client->getFollowerFile());
                     newFS.close();
                 }
             }
             fs.close();
         }
-
         // Update follower & following information
-        for (auto& [uname, user] : clientDB) {
+        for (auto& [_, user] : clientDB) {
             {
-                SemGuard fileLock(user->followingFile);
-                fs.clear();
-                fs.open(user->followingFile);
+                const string file = user->getFollowingFile();
+                SemGuard fileLock(file);
+                ifstream fs(file);
                 while (fs.peek() != ifstream::traits_type::eof()) {
                     getline(fs, following);
                     if (!user->following.count(following))
                         user->following[following] = clientDB[following];
                 }
-                fs.close();
             }
             {
-                SemGuard fileLock(user->followerFile);
-                fs.clear();
-                fs.open(user->followerFile);
+                const string file = user->getFollowerFile();
+                SemGuard fileLock(file);
+                ifstream fs(file);
                 while (fs.peek() != ifstream::traits_type::eof()) {
                     getline(fs, follower);
                     if (!user->followers.count(follower))
                         user->followers[follower] = clientDB[follower];
                 }
-                fs.close();
             }
         }
     }
@@ -481,13 +478,12 @@ void RunServer(string coordIP, string coordPort, string portNo) {
     cout << "Server listening on " << serverAddr << std::endl;
     log(INFO, "Server listening on " + serverAddr);
 
-    // Establish connection to coordinator
     string coordAddr = coordIP + ":" + coordPort;
     coordStub = CoordService::NewStub(
         grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
-    std::thread updateClientDB(UpdateClientDB);
-    std::thread heartbeat(Heartbeat, coordIP, coordPort, portNo);
+    thread updateClientDB(UpdateClientDB);
+    thread heartbeat(Heartbeat, coordIP, coordPort, portNo);
     server->Wait();
 
     updateClientDB.join();
@@ -500,7 +496,8 @@ int main(int argc, char** argv) {
 
     if (argc < 6) {
         cout << "Expected 6 args, got " << argc << '\n';
-        cout << "Usage: tsd -c <clusterId> -s <serverId> -h <coordinatorIP> -k "
+        cout << "Usage: tsd -c <clusterId> -s <serverId> -h "
+                "<coordinatorIP> -k "
                 "<coordinatorPort> -p <portNum>\n";
         return 0;
     }
@@ -532,16 +529,13 @@ int main(int argc, char** argv) {
     google::InitGoogleLogging(logFilename.c_str());
     log(INFO, "Logging initialized");
 
-    clusterDir = "cluster_" + to_string(clusterID) + "/";
-    serverDir = clusterDir + to_string(serverID) + "/";
-    allUsersFile = serverDir + "all_users.txt";
-
+    dirPrefix = path("cluster_" + to_string(clusterID)) / to_string(serverID);
+    allUsersFile = dirPrefix / "all_users.txt";
     {
         SemGuard lock(allUsersFile);
-        mkdir(clusterDir.data(), 0777);
-        mkdir(serverDir.data(), 0777);
+        remove_all(dirPrefix);
+        create_directories(dirPrefix);
         ofstream fs(allUsersFile);
-        fs.close();
     }
 
     RunServer(coordIP, coordPort, port);

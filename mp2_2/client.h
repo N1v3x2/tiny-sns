@@ -47,23 +47,22 @@ struct IReply {
 };
 
 std::string getPostMessage();
-void displayPostMessage(const std::string& sender, const std::string& message, std::time_t& time);
+void displayPostMessage(const std::string& sender, const std::string& message,
+                        std::time_t& time);
 
 class IClient {
-   public:
+  public:
     void run();
 
-   protected:
-    /*
-     * Pure virtual functions to be implemented by students
-     */
+  protected:
     virtual int connectTo() = 0;
     virtual IReply processCommand(std::string& cmd) = 0;
     virtual void processTimeline() = 0;
 
-   private:
+  private:
     void displayTitle() const;
     std::string getCommand() const;
-    void displayCommandReply(const std::string& comm, const IReply& reply) const;
+    void displayCommandReply(const std::string& comm,
+                             const IReply& reply) const;
     void toUpperCase(std::string& str) const;
 };

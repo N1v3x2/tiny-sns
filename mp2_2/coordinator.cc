@@ -41,6 +41,7 @@ using std::cout;
 using std::endl;
 using std::lock_guard;
 using std::mutex;
+using std::shared_ptr;
 using std::string;
 using std::to_string;
 using std::vector;
@@ -58,14 +59,17 @@ struct zNode {
     bool isActive();
 };
 
+using node_ptr = shared_ptr<zNode>;
+using table = vector<vector<node_ptr>>;
+
 const string SERVER = "server", SYNC = "synchronizer";
-using table = vector<vector<zNode*>>;
-table routingTable(3, vector<zNode*>()), synchronizers(3, vector<zNode*>());
+
+table routingTable{3, vector<node_ptr>()}, synchronizers{3, vector<node_ptr>()};
 mutex routingTableMtx, synchronizerMtx;
 
-zNode* findServer(int clusterID, int serverID, string type);
-zNode* getMasterServer(int clusterID);
-zNode* getSlaveServer(int clusterID);
+node_ptr findServer(int clusterID, int serverID, string type);
+node_ptr getMasterServer(int clusterID);
+node_ptr getSlaveServer(int clusterID);
 std::time_t getTimeNow();
 void checkHeartbeat();
 
@@ -83,13 +87,13 @@ class CoordServiceImpl final : public CoordService::Service {
 
         lock_guard<mutex> lock(synchronizerMtx);
         lock_guard<mutex> lock2(routingTableMtx);
-        zNode* server = findServer(clusterID, serverID, type);
+        node_ptr server = findServer(clusterID, serverID, type);
 
         if (!server) {
             // Register server after its first heartbeat
-            zNode* newserver =
-                new zNode(serverID, request->hostname(), request->port(),
-                          request->type(), getTimeNow(), false);
+            node_ptr newserver = std::make_shared<zNode>(
+                serverID, request->hostname(), request->port(), request->type(),
+                getTimeNow(), false);
 
             if (newserver->type == SERVER) {
                 routingTable[clusterID - 1].push_back(newserver);
@@ -123,7 +127,7 @@ class CoordServiceImpl final : public CoordService::Service {
 
         // First active server in the routing table is the master
         lock_guard<mutex> lock(routingTableMtx);
-        zNode* server = getMasterServer(clusterID);
+        node_ptr server = getMasterServer(clusterID);
         reply->set_serverid(server->serverID);
         reply->set_hostname(server->hostname);
         reply->set_port(server->port);
@@ -142,7 +146,7 @@ class CoordServiceImpl final : public CoordService::Service {
             "Received `GetSlave` request for clutser " + to_string(clusterID));
 
         lock_guard<mutex> lock(routingTableMtx);
-        zNode* slave = getSlaveServer(clusterID);
+        node_ptr slave = getSlaveServer(clusterID);
         reply->set_serverid(slave->serverID);
         reply->set_hostname(slave->hostname);
         reply->set_port(slave->port);
@@ -161,13 +165,13 @@ class CoordServiceImpl final : public CoordService::Service {
         log(INFO, "Received `GetFollowerServer` request");
 
         lock_guard<mutex> lock(synchronizerMtx);
-        zNode* master = getMasterServer(clusterID);
+        node_ptr master = getMasterServer(clusterID);
 
         for (size_t i = 0; i < synchronizers[clusterID - 1].size(); ++i) {
-            zNode* synchronizer = synchronizers[clusterID - 1][i];
+            node_ptr synchronizer = synchronizers[clusterID - 1][i];
 
             if (synchronizer->serverID == synchronizerID) {
-                zNode* server = routingTable[clusterID - 1][i];
+                node_ptr server = routingTable[clusterID - 1][i];
                 reply->set_serverid(server->serverID);
                 reply->set_hostname(server->hostname);
                 reply->set_port(server->port);
@@ -240,7 +244,7 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-zNode* findServer(int clusterID, int serverID, string type) {
+node_ptr findServer(int clusterID, int serverID, string type) {
     table servers = type == SERVER ? routingTable : synchronizers;
     for (auto& node : servers[clusterID - 1])
         if (node->serverID == serverID) return node;
@@ -254,9 +258,6 @@ std::time_t getTimeNow() {
 
 void checkHeartbeat() {
     while (true) {
-        sleep_for(5s);
-
-        // check each server for a heartbeat in the last 10 seconds
         {
             lock_guard<mutex> lock(routingTableMtx);
             for (auto& c : routingTable) {
@@ -281,19 +282,20 @@ void checkHeartbeat() {
                 }
             }
         }
+        sleep_for(5s);
     }
 }
 
 bool zNode::isActive() { return !missed_heartbeat; }
 
-zNode* getMasterServer(int clusterID) {
+node_ptr getMasterServer(int clusterID) {
     for (auto& s : routingTable[clusterID - 1]) {
         if (s->isActive()) return s;
     }
     return nullptr;
 }
 
-zNode* getSlaveServer(int clusterID) {
+node_ptr getSlaveServer(int clusterID) {
     if (routingTable[clusterID - 1].empty()) return nullptr;
     return routingTable[clusterID - 1].back();
 }

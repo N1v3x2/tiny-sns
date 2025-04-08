@@ -1,11 +1,14 @@
 #include "coordinator.grpc.pb.h"
 #include "coordinator.pb.h"
 #include "file_utils.h"
+#include "synchronizer_utils.h"
+
 #include <algorithm>
 #include <bits/fs_fwd.h>
 #include <condition_variable>
 #include <cstdlib>
 #include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <glog/logging.h>
 #include <google/protobuf/duration.pb.h>
@@ -36,6 +39,7 @@
 
 using namespace std::chrono_literals;
 using namespace std::this_thread;
+using namespace std::filesystem;
 
 using csce438::Confirmation;
 using csce438::CoordService;
@@ -49,6 +53,7 @@ using std::ifstream, std::ofstream;
 using std::mutex;
 using std::stoi;
 using std::string;
+using std::thread;
 using std::to_string;
 using std::unique_ptr;
 using std::vector;
@@ -62,15 +67,12 @@ mutex registeredMtx;
 condition_variable registeredCV;
 string coordAddr;
 unique_ptr<CoordService::Stub> coord_stub;
+path dirPrefix;
 
 vector<string> getAllUsers();
 vector<string> getTimeline(int userID);
 vector<string> getFollowers(int userID);
-string getDirPrefix();
-void Heartbeat(ServerInfo serverInfo);
-void die_on_amqp_error(amqp_rpc_reply_t x, char const* context);
-void die_on_error(int x, char const* context);
-void die(const char* fmt, ...);
+void Heartbeat(ServerInfo info);
 
 class Synchronizer {
   protected:
@@ -100,10 +102,14 @@ class Synchronizer {
     void setupRabbitMQ() {
         conn = amqp_new_connection();
         amqp_socket_t* socket = amqp_tcp_socket_new(conn);
-        if (!socket) { die("Creating TCP socket"); }
+        if (!socket) {
+            die("Creating TCP socket");
+        }
 
         int status = amqp_socket_open(socket, hostname.c_str(), port);
-        if (status) { die("Opening TCP socket"); }
+        if (status) {
+            die("Opening TCP socket");
+        }
 
         die_on_amqp_error(amqp_login(conn, "/", 0, 131072, 0,
                                      AMQP_SASL_METHOD_PLAIN, "guest", "guest"),
@@ -130,7 +136,9 @@ class SynchronizerProducer : public Synchronizer {
         sort(users.begin(), users.end());
 
         Json::Value userList;
-        for (auto user : users) { userList["users"].append(user); }
+        for (auto user : users) {
+            userList["users"].append(user);
+        }
 
         Json::FastWriter writer;
         string message = writer.write(userList);
@@ -152,7 +160,9 @@ class SynchronizerProducer : public Synchronizer {
                 followerList.append(follower);
             }
 
-            if (!followerList.empty()) { relations[user] = followerList; }
+            if (!followerList.empty()) {
+                relations[user] = followerList;
+            }
         }
 
         Json::FastWriter writer;
@@ -219,8 +229,6 @@ class SynchronizerConsumer : public Synchronizer {
 
             switch (res.reply_type) {
             case AMQP_RESPONSE_NORMAL: {
-                /*cout << "Received message" << endl;*/
-
                 string message(static_cast<char*>(envelope.message.body.bytes),
                                envelope.message.body.len);
                 string exchange(static_cast<char*>(envelope.exchange.bytes),
@@ -267,14 +275,20 @@ class SynchronizerConsumer : public Synchronizer {
 
     void consumeUserRelations(const string& message) {
         log(INFO, "Consuming user relations");
-        if (message.empty()) { return; }
+        if (message.empty()) {
+            return;
+        }
         vector<string> allUsers = getAllUsers();
         Json::Value jsonMsg;
         Json::Reader reader;
-        if (!reader.parse(message, jsonMsg)) { return; }
+        if (!reader.parse(message, jsonMsg)) {
+            return;
+        }
 
         for (const auto& user : allUsers) {
-            if (!jsonMsg.isMember(user)) { continue; }
+            if (!jsonMsg.isMember(user)) {
+                continue;
+            }
             updateUserFollowers(user, jsonMsg);
         }
     }
@@ -284,10 +298,14 @@ class SynchronizerConsumer : public Synchronizer {
         if (!message.empty()) {
             Json::Value root;
             Json::Reader reader;
-            if (!reader.parse(message, root)) { return; }
+            if (!reader.parse(message, root)) {
+                return;
+            }
 
             for (auto& user : getAllUsers()) {
-                if (!root.isMember(user)) { continue; }
+                if (!root.isMember(user)) {
+                    continue;
+                }
                 vector<string> lines;
                 for (const auto& line : root[user]) {
                     lines.push_back(line.asString());
@@ -299,7 +317,7 @@ class SynchronizerConsumer : public Synchronizer {
 
     void updateAllUsersFile(const vector<string>& users) {
         vector<string> currentUsers = getAllUsers();
-        string file = getDirPrefix() + "all_users.txt";
+        const path file = dirPrefix / "all_users.txt";
         SemGuard fileLock(file);
         ofstream fs(file, fs.app);
         for (string user : users) {
@@ -312,7 +330,7 @@ class SynchronizerConsumer : public Synchronizer {
 
     void updateUserFollowers(const string& user, const Json::Value& jsonMsg) {
         vector<string> followers = getFollowers(stoi(user));
-        string file = getDirPrefix() + user + "_followers.txt";
+        const path file = dirPrefix / (user + "_followers.txt");
         SemGuard fileLock(file);
         ofstream fs(file, fs.app);
         for (const auto& follower : jsonMsg[user]) {
@@ -324,20 +342,20 @@ class SynchronizerConsumer : public Synchronizer {
     }
 
     void updateUserTimeline(const string& user, const vector<string>& lines) {
-        string timelineFile = getDirPrefix() + user + "_timeline.txt";
+        const path timelineFile = dirPrefix / (user + "_timeline.txt");
         SemGuard lock(timelineFile);
 
         time_t lastTimestamp = 0;
         std::fstream fs(timelineFile, fs.in | fs.out);
         char fill;
         std::tm postTime{};
-        string postUser, postContent, dummy;
+        string postUser, postContent, empty;
         while (fs.peek() != ifstream::traits_type::eof()) {
             fs >> fill >> std::ws >>
                 std::get_time(&postTime, "%a %b %d %H:%M:%S %Y") >> fill >>
                 postUser >> fill >> std::ws;
             std::getline(fs, postContent);
-            std::getline(fs, dummy);
+            std::getline(fs, empty);
             lastTimestamp = std::mktime(&postTime);
         }
         fs.clear();
@@ -376,21 +394,9 @@ class SynchronizerConsumer : public Synchronizer {
     }
 };
 
+void RunServer(string port);
 void publishMessages(string port);
 void consumeMessages();
-
-void RunServer(string port) {
-    // Wait for registration heartbeat before continuing
-    std::unique_lock<mutex> lock(registeredMtx);
-    registeredCV.wait(lock, [] { return registered; });
-    log(INFO, "Registration complete; setting up synchronizer");
-
-    std::thread producer(publishMessages, port);
-    std::thread consumer(consumeMessages);
-
-    producer.join();
-    consumer.join();
-}
 
 int main(int argc, char** argv) {
     int opt = 0;
@@ -417,6 +423,8 @@ int main(int argc, char** argv) {
         }
     }
 
+    clusterID = ((synchID - 1) % 3) + 1;
+
     string logFilename = string("synchronizer-") + port;
     google::InitGoogleLogging(logFilename.c_str());
     log(INFO, "Logging Initialized. Server starting...");
@@ -425,47 +433,29 @@ int main(int argc, char** argv) {
     coord_stub = CoordService::NewStub(
         grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
-    clusterID = ((synchID - 1) % 3) + 1;
     ServerInfo serverInfo;
     serverInfo.set_hostname("localhost");
     serverInfo.set_port(port);
     serverInfo.set_type("synchronizer");
     serverInfo.set_serverid(synchID);
     serverInfo.set_clusterid(clusterID);
-    std::thread hb(Heartbeat, serverInfo);
+    thread hb(Heartbeat, serverInfo);
 
     RunServer(port);
     return 0;
 }
 
-void publishMessages(string port) {
-    SynchronizerProducer producer("rabbitmq", 5672);
+void RunServer(string port) {
+    // Wait for registration heartbeat before continuing
+    std::unique_lock<mutex> lock(registeredMtx);
+    registeredCV.wait(lock, [] { return registered; });
+    log(INFO, "Registration complete; setting up synchronizer");
 
-    ServerInfo msg;
-    Confirmation c;
-    msg.set_serverid(synchID);
-    msg.set_hostname("127.0.0.1");
-    msg.set_port(port);
-    msg.set_type("follower");
+    thread producer(publishMessages, port);
+    thread consumer(consumeMessages);
 
-    ServerList followerServers;
-    ID id;
-    id.set_id(synchID);
-
-    while (true) {
-        if (isMaster) {
-            /*cout << "Producing message" << endl;*/
-            producer.publishUserList();
-            producer.publishUserRelations();
-            producer.publishTimelines();
-        }
-        sleep_for(5s);
-    }
-}
-
-void consumeMessages() {
-    SynchronizerConsumer consumer("rabbitmq", 5672);
-    consumer.consumeMessages();
+    producer.join();
+    consumer.join();
 }
 
 void Heartbeat(ServerInfo serverInfo) {
@@ -486,105 +476,60 @@ void Heartbeat(ServerInfo serverInfo) {
                 std::terminate();
             }
         }
-        if (!registered) {
-            registered = true;
-            registeredCV.notify_all();
-        }
         {
             ClientContext context;
             log(INFO, "Sending `GetFollowerServer` request to coordinator");
             coord_stub->GetFollowerServer(&context, id, &response);
         }
+
         serverID = response.serverid();
         isMaster = response.ismaster();
+        dirPrefix =
+            path("cluster_" + to_string(clusterID)) / to_string(serverID);
+
+        if (!registered) {
+            registered = true;
+            registeredCV.notify_all();
+        }
         sleep_for(5s);
     }
 }
 
-vector<string> getLinesFromFile(const string& filename) {
-    auto getLines = [](const string& filepath) {
-        vector<string> lines;
-        SemGuard fileLock(filepath);
-        ifstream fs(filepath);
-        if (fs.is_open()) {
-            string line;
-            while (fs.peek() != ifstream::traits_type::eof()) {
-                getline(fs, line);
-                lines.push_back(line);
-            }
+void publishMessages(string port) {
+    SynchronizerProducer producer("rabbitmq", 5672);
+
+    ServerInfo msg;
+    Confirmation c;
+    msg.set_serverid(synchID);
+    msg.set_hostname("127.0.0.1");
+    msg.set_port(port);
+    msg.set_type("follower");
+
+    ServerList followerServers;
+    ID id;
+    id.set_id(synchID);
+
+    while (true) {
+        if (isMaster) {
+            producer.publishUserList();
+            producer.publishUserRelations();
+            producer.publishTimelines();
         }
-        return lines;
-    };
-    string masterFile = "cluster_" + to_string(clusterID) + "/" +
-                        to_string(serverID) + "/" + filename;
-    return getLines(masterFile);
+        sleep_for(5s);
+    }
 }
-vector<string> getAllUsers() { return getLinesFromFile("all_users.txt"); }
+
+void consumeMessages() {
+    SynchronizerConsumer consumer("rabbitmq", 5672);
+    consumer.consumeMessages();
+}
+
+vector<string> getAllUsers() {
+    return getLinesFromFile(dirPrefix / "all_users.txt");
+}
 vector<string> getTimeline(int userID) {
-    return getLinesFromFile(to_string(userID) + "_timeline.txt");
+    return getLinesFromFile(dirPrefix / (to_string(userID) + "_timeline.txt"));
 }
 vector<string> getFollowers(int userID) {
-    return getLinesFromFile(to_string(userID) + "_followers.txt");
-}
-string getDirPrefix() {
-    return "cluster_" + to_string(clusterID) + "/" + to_string(serverID) + "/";
-}
-
-void die_on_amqp_error(amqp_rpc_reply_t x, char const* context) {
-    switch (x.reply_type) {
-    case AMQP_RESPONSE_NORMAL:
-        return;
-
-    case AMQP_RESPONSE_NONE:
-        fprintf(stderr, "%s: missing RPC reply type!\n", context);
-        break;
-
-    case AMQP_RESPONSE_LIBRARY_EXCEPTION:
-        fprintf(stderr, "%s: %s\n", context,
-                amqp_error_string2(x.library_error));
-        break;
-
-    case AMQP_RESPONSE_SERVER_EXCEPTION:
-        switch (x.reply.id) {
-        case AMQP_CONNECTION_CLOSE_METHOD: {
-            amqp_connection_close_t* m =
-                (amqp_connection_close_t*)x.reply.decoded;
-            fprintf(stderr, "%s: server connection error %uh, message: %.*s\n",
-                    context, m->reply_code, (int)m->reply_text.len,
-                    (char*)m->reply_text.bytes);
-            break;
-        }
-        case AMQP_CHANNEL_CLOSE_METHOD: {
-            amqp_channel_close_t* m = (amqp_channel_close_t*)x.reply.decoded;
-            fprintf(stderr, "%s: server channel error %uh, message: %.*s\n",
-                    context, m->reply_code, (int)m->reply_text.len,
-                    (char*)m->reply_text.bytes);
-            break;
-        }
-        default:
-            fprintf(stderr, "%s: unknown server error, method id 0x%08X\n",
-                    context, x.reply.id);
-            break;
-        }
-        break;
-    }
-    // FIXME: replace with exception throwing for more robustness (otherwise
-    // destructors won't get called)
-    exit(1);
-}
-
-void die_on_error(int x, char const* context) {
-    if (x < 0) {
-        fprintf(stderr, "%s: %s\n", context, amqp_error_string2(x));
-        exit(1);
-    }
-}
-
-void die(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fprintf(stderr, "\n");
-    exit(1);
+    return getLinesFromFile(dirPrefix / (to_string(userID) + "_followers.txt"));
 }

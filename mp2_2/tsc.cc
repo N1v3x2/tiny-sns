@@ -36,8 +36,6 @@ using std::cout;
 using std::string;
 using std::unique_ptr;
 
-void sig_ignore(int sig) { cout << "Signal caught " << sig; }
-
 Message MakeMessage(const string& username, const string& msg) {
     Message m;
     m.set_username(username);
@@ -50,6 +48,12 @@ Message MakeMessage(const string& username, const string& msg) {
 }
 
 class Client : public IClient {
+  private:
+    string hostname;
+    string port;
+    string username;
+    unique_ptr<SNSService::Stub> stub_;
+
   public:
     Client(string coord_ip, string coord_port, string uname) : username(uname) {
         unique_ptr<CoordService::Stub> coord_stub_(CoordService::NewStub(
@@ -61,8 +65,7 @@ class Client : public IClient {
         client_id.set_id(std::stoi(uname));
         ServerInfo info;
 
-        grpc::Status status =
-            coord_stub_->GetServer(&context, client_id, &info);
+        Status status = coord_stub_->GetServer(&context, client_id, &info);
         if (!status.ok()) {
             throw std::runtime_error(
                 "Failed to establish connection with coordinator");
@@ -78,16 +81,10 @@ class Client : public IClient {
     virtual void processTimeline();
 
   private:
-    string hostname;
-    string port;
-    string username;
-
-    unique_ptr<SNSService::Stub> stub_;
-
     IReply Login();
     IReply List();
-    IReply Follow(const string& username);
-    IReply UnFollow(const string& username);
+    IReply Follow(const string& toFollow);
+    IReply UnFollow(const string& toUnfollow);
     void Timeline(const string& username);
 };
 
@@ -120,9 +117,7 @@ IReply Client::processCommand(string& input) {
         string toUnfollow;
         ss >> toUnfollow;
         ire = UnFollow(toUnfollow);
-    } else if (cmd == "LIST") {
-        ire = List();
-    } else if (cmd == "TIMELINE") {
+    } else if (cmd == "LIST" || cmd == "TIMELINE") {
         ire = List();
     } else {
         ire.grpc_status = Status::OK;
@@ -148,12 +143,11 @@ IReply Client::List() {
     if (ire.grpc_status.ok()) {
         log(INFO, "Client " + username + ": received `List` from server");
         ire.comm_status = SUCCESS;
-        // Deserialize the user information
-        for (int i = 0; i < reply.all_users_size(); ++i) {
-            ire.all_users.push_back(reply.all_users(i));
+        for (const auto& user : reply.all_users()) {
+            ire.all_users.push_back(user);
         }
-        for (int i = 0; i < reply.followers_size(); ++i) {
-            ire.followers.push_back(reply.followers(i));
+        for (const auto& follower : reply.followers()) {
+            ire.followers.push_back(follower);
         }
     } else {
         log(ERROR, "Client " + username +
@@ -163,13 +157,13 @@ IReply Client::List() {
     return ire;
 }
 
-IReply Client::Follow(const string& username2) {
+IReply Client::Follow(const string& toFollow) {
     IReply ire;
 
     ClientContext context;
     Request request;
     request.set_username(username);
-    request.add_arguments(username2);
+    request.add_arguments(toFollow);
     Reply reply;
 
     log(INFO, "Client " + username + ": requesting `Follow` from server");
@@ -194,13 +188,13 @@ IReply Client::Follow(const string& username2) {
     return ire;
 }
 
-IReply Client::UnFollow(const string& username2) {
+IReply Client::UnFollow(const string& toUnfollow) {
     IReply ire;
 
     ClientContext context;
     Request request;
     request.set_username(username);
-    request.add_arguments(username2);
+    request.add_arguments(toUnfollow);
     Reply reply;
 
     log(INFO, "Client " + username + ": requesting `UnFollow` from server");
@@ -313,7 +307,6 @@ int main(int argc, char** argv) {
     log(INFO, "Client " + username + ": Logging initialized");
 
     Client myc(coord_ip, coord_port, username);
-
     myc.run();
 
     return 0;

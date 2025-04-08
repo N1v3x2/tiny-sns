@@ -1,7 +1,5 @@
 #!/bin/bash
 
-rm -rf ./cluster_*
-
 ./coordinator -p 9000 &
 
 sleep 2
