@@ -1,6 +1,7 @@
 cluster_*/
 *.grpc.*
 *.o
+*.pb.*
 tsc
 tsd
 synchronizer

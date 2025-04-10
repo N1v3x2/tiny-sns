@@ -56,25 +56,81 @@ struct zNode {
     zNode(int s, string h, string p, string t, time_t l, bool m)
         : serverID(s), hostname(h), port(p), type(t), last_heartbeat(l),
           missed_heartbeat(m) {}
-    bool isActive();
+    bool isActive() { return !missed_heartbeat; }
 };
 
 using node_ptr = shared_ptr<zNode>;
 using table = vector<vector<node_ptr>>;
 
-const string SERVER = "server", SYNC = "synchronizer";
+const string SERVER = "server";
+const string SYNCHRONIZER = "synchronizer";
 
-table routingTable{3, vector<node_ptr>()}, synchronizers{3, vector<node_ptr>()};
-mutex routingTableMtx, synchronizerMtx;
+/**
+ * @brief Routing table, represented as a 2D vector:
+ * - First dimension: cluster ID
+ * - Second dimension: list of pointers to `zNode` instances containing each
+ * server's information
+ */
+table routingTable{3, vector<node_ptr>()};
+mutex routingTableMtx;
 
+/**
+ * @brief Synchronizer table, represented as a 2D vector:
+ * - First dimension: cluster ID
+ * - Second dimension: list of pointers to `zNode` instances containing each
+ * follower synchronizer's information
+ */
+table synchronizers{3, vector<node_ptr>()};
+mutex synchronizerMtx;
+
+/**
+ * @brief Attempts to find a server that matches the parameters
+ *
+ * @param clusterID The cluster ID to search
+ * @param serverID The server ID to look for
+ * @param type The type of server to look for ("server" or "synchronizer")
+ * @return A `node_ptr` to the server found or `nullptr` if it doesn't exist
+ */
 node_ptr findServer(int clusterID, int serverID, string type);
+
+/**
+ * @brief Get the master server in the cluster
+ *
+ * @param clusterID The cluster to search
+ * @return A `node_ptr` to the master server or `nullptr` if none
+ */
 node_ptr getMasterServer(int clusterID);
+
+/**
+ * @brief Get the slave server in the cluster (assumes that a cluster has <= 2
+ * servers)
+ *
+ * @param clusterID The cluster to search
+ * @return A `node_ptr` to the slave server or `nullptr` if none
+ */
 node_ptr getSlaveServer(int clusterID);
+
+/**
+ * @brief Get the current time
+ */
 std::time_t getTimeNow();
-void checkHeartbeat();
+
+/**
+ * @brief Periodically checks heartbeats in `routingTable` and `synchronizers`
+ * (every 5 seconds); used by background thread
+ */
+void checkHeartbeats();
 
 class CoordServiceImpl final : public CoordService::Service {
 
+    /**
+     * @brief (RPC) Updates the client's heartbeat
+     *
+     * @param context The request context
+     * @param request The client request containing client information
+     * @param reply The reply to send to the client
+     * @return RPC status
+     */
     Status Heartbeat(ServerContext* context, const ServerInfo* request,
                      Confirmation* reply) override {
         int serverID = request->serverid();
@@ -97,7 +153,7 @@ class CoordServiceImpl final : public CoordService::Service {
 
             if (newserver->type == SERVER) {
                 routingTable[clusterID - 1].push_back(newserver);
-            } else if (newserver->type == SYNC) {
+            } else if (newserver->type == SYNCHRONIZER) {
                 synchronizers[clusterID - 1].push_back(newserver);
             } else {
                 log(WARNING, "Unknown server type attempted registration");
@@ -117,7 +173,15 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
-    // Return the master
+    /**
+     * @brief (RPC) Gets the master server in the cluster
+     *
+     * @param context The request context
+     * @param request The client request containing the cluster ID
+     * @param reply The reply containing information about the cluster's master
+     * server
+     * @return RPC status
+     */
     Status GetServer(ServerContext* context, const ID* request,
                      ServerInfo* reply) override {
         int clientID = request->id();
@@ -139,6 +203,16 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    /**
+     * @brief (RPC) Gets the slave server in the cluster
+     *
+     * @param context The request context
+     * @param request The client request containing the cluster ID
+     * @param reply The reply containing information about the cluster's slave
+     * server. Note: if there is no slave in the cluster, the reply's `serverid`
+     * is set to -1
+     * @return RPC status
+     */
     Status GetSlave(ServerContext* context, const ID* request,
                     ServerInfo* reply) override {
         int clusterID = request->id();
@@ -163,6 +237,15 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    /**
+     * @brief (RPC) Gets the server corresponding to the follower synchronizer
+     *
+     * @param context The server context
+     * @param request The client request containing the follower synchronizer ID
+     * @param reply Server information about the server corresponding to the
+     * client's synchronizer ID
+     * @return RPC status
+     */
     Status GetFollowerServer(ServerContext* context, const ID* request,
                              ServerInfo* reply) override {
         int synchronizerID = request->id();
@@ -187,31 +270,15 @@ class CoordServiceImpl final : public CoordService::Service {
         }
         return Status::OK;
     }
-
-    Status GetFollowerServers(ServerContext* context, const ID* id,
-                              ServerList* reply) override {
-        int synchronizerID = id->id();
-        log(INFO,
-            "Received `GetAllFollowerServers` request from synchronizer " +
-                to_string(synchronizerID));
-        lock_guard<mutex> lock(synchronizerMtx);
-        for (auto& cluster : synchronizers) {
-            for (auto& synchronizer : cluster) {
-                if (synchronizer->serverID == synchronizerID)
-                    continue;
-                reply->add_serverid(synchronizer->serverID);
-                reply->add_hostname(synchronizer->hostname);
-                reply->add_port(synchronizer->port);
-                reply->add_type(synchronizer->type);
-            }
-        }
-        log(INFO, "Sending `ServerList` from `GetAllFollowerServers` request");
-        return Status::OK;
-    }
 };
 
+/**
+ * @brief Starts the coordinator; blocks to wait for RPCs
+ *
+ * @param port_no The port to connect to
+ */
 void RunServer(string port_no) {
-    std::thread hb(checkHeartbeat);
+    std::thread hb(checkHeartbeats);
 
     string serverAddr("127.0.0.1:" + port_no);
     CoordServiceImpl service;
@@ -263,7 +330,7 @@ std::time_t getTimeNow() {
         std::chrono::system_clock::now());
 }
 
-void checkHeartbeat() {
+void checkHeartbeats() {
     while (true) {
         {
             lock_guard<mutex> lock(routingTableMtx);
@@ -292,8 +359,6 @@ void checkHeartbeat() {
         sleep_for(5s);
     }
 }
-
-bool zNode::isActive() { return !missed_heartbeat; }
 
 node_ptr getMasterServer(int clusterID) {
     for (auto& s : routingTable[clusterID - 1]) {
