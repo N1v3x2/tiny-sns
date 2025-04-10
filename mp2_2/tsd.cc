@@ -65,19 +65,55 @@ using std::vector;
 struct Client;
 using client_ptr = shared_ptr<Client>;
 
-int serverID, clusterID;
-path dirPrefix, allUsersFile;
+/**
+ * @brief This server's ID
+ */
+int serverID;
+
+/**
+ * @brief This server's cluster ID
+ */
+int clusterID;
+
+/**
+ * @brief The directory prefix for all files this server is responsible for,
+ * e.g. "cluster_1/1"
+ */
+path dirPrefix;
+
+/**
+ * @brief The pathof the "all_users.txt" file this server uses
+ */
+path allUsersFile;
+
+/**
+ * @brief gRPC stub for communicating with the coordinator
+ */
 unique_ptr<CoordService::Stub> coordStub;
-map<string, client_ptr> clientDB;
+
+/**
+ * @brief In-memory cache of `Client`s, which stores information about which
+ * users are logged into the SNS and user follower/following relationships
+ */
+map<string, client_ptr> clientCache;
 mutex clientMtx;
 
+/**
+ * @class Client
+ * @brief In-memory representation of a client logged into the SNS
+ *
+ */
 struct Client {
     string username;
-    map<string, client_ptr> followers, following;
+    map<string, client_ptr> followers;
+    map<string, client_ptr> following;
+
     Client(const string& uname) : username(uname) {}
+
     bool operator==(const Client& c1) const {
         return (username == c1.username);
     }
+
     path getTimelineFile() { return dirPrefix / (username + "_timeline.txt"); }
     path getFollowerFile() { return dirPrefix / (username + "_followers.txt"); }
     path getFollowingFile() {
@@ -85,11 +121,44 @@ struct Client {
     }
 };
 
+/**
+ * @brief Gets information about this cluster's slave server from the
+ * coordinator
+ *
+ * @return `ServerInfo` object containing information about the slave server
+ */
 ServerInfo GetSlaveInfo();
+
+/**
+ * @brief Checks with the coordinator whether this server is the master of its
+ * cluster
+ *
+ * @return `true` if this server is the master, otherwise `false`
+ */
 bool isMaster();
+
+/**
+ * @brief Checks with the coordinator whether a slave server exists in this
+ * cluster
+ *
+ * @return `true` if this cluster has a slave, otherwise `false`
+ */
 bool hasSlave();
-unique_ptr<SNSService::Stub> GetSlaveStub();
-Message MakeMessage(const string& username, const string& msg);
+
+/**
+ * @brief Gets a gRPC stub to communicate with this cluster's slave server (only
+ * called if this is a master)
+ */
+unique_ptr<SNSService::Stub> getSlaveStub();
+
+/**
+ * @brief Constructs a `Message` object (represents a timeline post)
+ *
+ * @param username The user who posted
+ * @param msg The user's message
+ * @return The constructed message
+ */
+Message makeMessage(const string& username, const string& msg);
 
 class SNSServiceImpl final : public SNSService::Service {
     Status List(ServerContext* context, const Request* request,
@@ -98,11 +167,11 @@ class SNSServiceImpl final : public SNSService::Service {
         log(INFO, "Received `List` request " + username);
 
         lock_guard<mutex> lock(clientMtx);
-        for (auto& [uname, _] : clientDB) {
+        for (auto& [uname, _] : clientCache) {
             response->add_all_users(uname);
         }
 
-        client_ptr client = clientDB[username];
+        client_ptr client = clientCache[username];
         for (auto& [follower_uname, _] : client->followers) {
             response->add_followers(follower_uname);
         }
@@ -125,12 +194,12 @@ class SNSServiceImpl final : public SNSService::Service {
         client_ptr client = nullptr, clientToFollow = nullptr;
         {
             lock_guard<mutex> lock(clientMtx);
-            if (!clientDB.count(toFollow)) {
+            if (!clientCache.count(toFollow)) {
                 response->set_msg("Invalid username");
                 return Status::OK;
             }
-            client = clientDB[username];
-            clientToFollow = clientDB[toFollow];
+            client = clientCache[username];
+            clientToFollow = clientCache[toFollow];
 
             if (client->following.count(toFollow) ||
                 *client == *clientToFollow) {
@@ -155,7 +224,7 @@ class SNSServiceImpl final : public SNSService::Service {
         }
 
         if (isMaster() && hasSlave()) {
-            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub();
+            unique_ptr<SNSService::Stub> slaveStub = getSlaveStub();
             ClientContext ctx;
             Request req;
             req.set_username(username);
@@ -168,31 +237,6 @@ class SNSServiceImpl final : public SNSService::Service {
         return Status::OK;
     }
 
-    /* Status UnFollow(ServerContext* context, const Request* request,
-    Reply* reply) override { string username = request->username();
-    log(INFO, "Received `UnFollow` request from client " + username);
-
-        if (request->arguments_size() < 1) {
-            reply->set_msg("Invalid command");
-            return Status::OK;
-        }
-
-        client_ptr client = client_db[username];
-
-        string username2 = request->arguments(0);
-        if (!client->client_following.count(username2)) {
-            reply->set_msg("Invalid username");
-            return Status::OK;
-        }
-
-        client->client_following.erase(username2);
-
-        client_ptr to_unfollow = client_db[username2];
-        to_unfollow->client_followers.erase(username);
-
-        return Status::OK;
-    } */
-
     Status Login(ServerContext* context, const Request* request,
                  Reply* reply) override {
         string username = request->username();
@@ -200,12 +244,12 @@ class SNSServiceImpl final : public SNSService::Service {
 
         {
             lock_guard<mutex> lock(clientMtx);
-            if (clientDB.count(username)) {
+            if (clientCache.count(username)) {
                 return Status::OK;
             }
 
             client_ptr client = std::make_shared<Client>(username);
-            clientDB[username] = client;
+            clientCache[username] = client;
 
             ofstream fs(client->getTimelineFile());
             fs.close();
@@ -221,7 +265,7 @@ class SNSServiceImpl final : public SNSService::Service {
         }
 
         if (isMaster() && hasSlave()) {
-            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub();
+            unique_ptr<SNSService::Stub> slave_stub = getSlaveStub();
             ClientContext ctx;
             Request req;
             req.set_username(username);
@@ -242,7 +286,7 @@ class SNSServiceImpl final : public SNSService::Service {
         // Set the current user based on the first message received
         if (stream->Read(&msg)) {
             username = msg.username();
-            client = clientDB[username];
+            client = clientCache[username];
         } else {
             return Status::OK;
         }
@@ -307,12 +351,12 @@ class SNSServiceImpl final : public SNSService::Service {
         std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
         ClientContext ctx;
         if (isMaster() && hasSlave()) {
-            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub();
+            unique_ptr<SNSService::Stub> slaveStub = getSlaveStub();
             slaveStream = slaveStub->Timeline(&ctx);
             log(INFO, "Master: establishing timeline connection to "
                       "slave");
             string connMsg = "Timeline";
-            slaveStream->Write(MakeMessage(username, connMsg));
+            slaveStream->Write(makeMessage(username, connMsg));
         }
 
         ofstream fs;
@@ -364,7 +408,7 @@ bool hasSlave() {
     return reply.serverid() != -1;
 }
 
-unique_ptr<SNSService::Stub> GetSlaveStub() {
+unique_ptr<SNSService::Stub> getSlaveStub() {
     ClientContext ctx;
     ID req;
     req.set_id(clusterID);
@@ -375,7 +419,7 @@ unique_ptr<SNSService::Stub> GetSlaveStub() {
         grpc::CreateChannel(slaveAddr, grpc::InsecureChannelCredentials()));
 }
 
-Message MakeMessage(const string& username, const string& msg) {
+Message makeMessage(const string& username, const string& msg) {
     Message m;
     m.set_username(username);
     m.set_msg(msg);
@@ -386,21 +430,27 @@ Message MakeMessage(const string& username, const string& msg) {
     return m;
 }
 
-// Background heartbeat thread function
-void Heartbeat(string coordIP, string coordPort, string portNo) {
+/**
+ * @brief Sends heartbeats periodically (every 5 seconds) to the coordinator;
+ * used by background thread
+ *
+ * @param coordIP The coordinator's IP
+ * @param coordPort The coordinator's port
+ * @param portNo This server's port
+ */
+void heartbeat(string coordIP, string coordPort, string serverPort) {
     const string hostname = "0.0.0.0";
     string coord_address = coordIP + ":" + coordPort;
 
     ServerInfo info;
     info.set_serverid(serverID);
     info.set_hostname(hostname);
-    info.set_port(portNo);
+    info.set_port(serverPort);
     info.set_type("server");
     info.set_clusterid(clusterID);
 
     Confirmation confirmation;
 
-    // Send heartbeat every 5 seconds
     while (true) {
         ClientContext context;
         log(INFO, "Sending heartbeat to coordinator");
@@ -415,7 +465,11 @@ void Heartbeat(string coordIP, string coordPort, string portNo) {
     }
 }
 
-void UpdateClientDB() {
+/**
+ * @brief Periodically updates the in-memory client cache by reading files
+ * belonging to this server's cluster (used by background thread)
+ */
+void UpdateClientCache() {
     string username, follower, following;
 
     while (true) {
@@ -426,9 +480,9 @@ void UpdateClientDB() {
             ifstream fs(allUsersFile);
             while (fs.peek() != ifstream::traits_type::eof()) {
                 getline(fs, username);
-                if (!clientDB.count(username)) {
+                if (!clientCache.count(username)) {
                     client_ptr client = std::make_shared<Client>(username);
-                    clientDB[username] = client;
+                    clientCache[username] = client;
 
                     ofstream newFS(client->getTimelineFile());
                     newFS.close();
@@ -441,7 +495,7 @@ void UpdateClientDB() {
             fs.close();
         }
         // Update follower & following information
-        for (auto& [_, user] : clientDB) {
+        for (auto& [_, user] : clientCache) {
             {
                 const string file = user->getFollowingFile();
                 SemGuard fileLock(file);
@@ -449,7 +503,7 @@ void UpdateClientDB() {
                 while (fs.peek() != ifstream::traits_type::eof()) {
                     getline(fs, following);
                     if (!user->following.count(following))
-                        user->following[following] = clientDB[following];
+                        user->following[following] = clientCache[following];
                 }
             }
             {
@@ -459,16 +513,23 @@ void UpdateClientDB() {
                 while (fs.peek() != ifstream::traits_type::eof()) {
                     getline(fs, follower);
                     if (!user->followers.count(follower))
-                        user->followers[follower] = clientDB[follower];
+                        user->followers[follower] = clientCache[follower];
                 }
             }
         }
     }
 }
 
-void RunServer(string coordIP, string coordPort, string portNo) {
+/**
+ * @brief Starts the server
+ *
+ * @param coordIP The coordinator's IP
+ * @param coordPort The coordinator's port
+ * @param portNo This server's port
+ */
+void RunServer(string coordIP, string coordPort, string serverPort) {
     const string hostname = "0.0.0.0";
-    string serverAddr = hostname + ":" + portNo;
+    string serverAddr = hostname + ":" + serverPort;
     SNSServiceImpl service;
 
     ServerBuilder builder;
@@ -482,12 +543,12 @@ void RunServer(string coordIP, string coordPort, string portNo) {
     coordStub = CoordService::NewStub(
         grpc::CreateChannel(coordAddr, grpc::InsecureChannelCredentials()));
 
-    thread updateClientDB(UpdateClientDB);
-    thread heartbeat(Heartbeat, coordIP, coordPort, portNo);
+    thread updateClientDB(UpdateClientCache);
+    thread hb(heartbeat, coordIP, coordPort, serverPort);
     server->Wait();
 
     updateClientDB.join();
-    heartbeat.join();
+    hb.join();
 }
 
 int main(int argc, char** argv) {

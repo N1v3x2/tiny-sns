@@ -36,7 +36,7 @@ using std::cout;
 using std::string;
 using std::unique_ptr;
 
-Message MakeMessage(const string& username, const string& msg) {
+Message makeMessage(const string& username, const string& msg) {
     Message m;
     m.set_username(username);
     m.set_msg(msg);
@@ -91,10 +91,12 @@ class Client : public IClient {
 int Client::connectTo() {
     stub_ = SNSService::NewStub(grpc::CreateChannel(
         hostname + ":" + port, grpc::InsecureChannelCredentials()));
-    if (!stub_) return -1;
+    if (!stub_)
+        return -1;
 
     IReply status = Login();
-    if (!status.grpc_status.ok()) return -1;
+    if (!status.grpc_status.ok())
+        return -1;
 
     return 1;
 }
@@ -248,7 +250,7 @@ void Client::Timeline(const string& username) {
         stub_->Timeline(&context));
 
     string newTimelineMsg = "Timeline";
-    Message newTimeline = MakeMessage(username, newTimelineMsg);
+    Message newTimeline = makeMessage(username, newTimelineMsg);
 
     log(INFO, "Client " + username + ": requesting timeline from server");
     stream->Write(newTimeline);
@@ -267,7 +269,7 @@ void Client::Timeline(const string& username) {
     // Write posts
     while (true) {
         string msg = getPostMessage();
-        Message new_post = MakeMessage(username, msg);
+        Message new_post = makeMessage(username, msg);
         log(INFO, "Client " + username + ": writing post to timeline");
         stream->Write(new_post);
     }

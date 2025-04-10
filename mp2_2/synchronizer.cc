@@ -68,13 +68,13 @@ int synchID;
 int clusterID;
 
 /**
- * @brief The ID of the server the synchronizer is tied to (set in `Heartbeat`)
+ * @brief The ID of the server the synchronizer is tied to (set in `heartbeat`)
  */
 std::atomic_int serverID;
 
 /**
  * @brief Flag indicating whether the current synchronizer is a master (set in
- * `Heartbeat`)
+ * `heartbeat`)
  */
 std::atomic_bool isMaster = false;
 
@@ -123,7 +123,7 @@ vector<string> getFollowers(int userID);
  *
  * @param info The current synchronizer's server info
  */
-void Heartbeat(ServerInfo info);
+void heartbeat(ServerInfo info);
 
 /**
  * @class Synchronizer
@@ -155,8 +155,10 @@ class Synchronizer {
         declareExchange("timelines", "fanout");
     }
 
-    // Ensure that channels & connections are closed before class goes out of
-    // scope
+    /**
+     * @brief Ensures all channels and connections are closed before instance
+     * goes out of scope
+     */
     ~Synchronizer() {
         die_on_amqp_error(amqp_channel_close(conn, channel, AMQP_REPLY_SUCCESS),
                           "Closing channel");
@@ -312,7 +314,7 @@ class SynchronizerProducer : public Synchronizer {
 class SynchronizerConsumer : public Synchronizer {
   private:
     /**
-     * @brief The names of the consumer's auto-generated queue names
+     * @brief The names of the consumer's auto-generated queues
      */
     vector<amqp_bytes_t> queues;
 
@@ -617,7 +619,7 @@ int main(int argc, char** argv) {
     serverInfo.set_type("synchronizer");
     serverInfo.set_serverid(synchID);
     serverInfo.set_clusterid(clusterID);
-    thread hb(Heartbeat, serverInfo);
+    thread hb(heartbeat, serverInfo);
 
     RunServer();
     return 0;
@@ -636,7 +638,7 @@ void RunServer() {
     consumer.join();
 }
 
-void Heartbeat(ServerInfo serverInfo) {
+void heartbeat(ServerInfo serverInfo) {
     Confirmation conf;
     ServerInfo response;
     ID id;
