@@ -45,7 +45,6 @@ using csce438::Confirmation;
 using csce438::CoordService;
 using csce438::ID;
 using csce438::ServerInfo;
-using csce438::ServerList;
 using grpc::ClientContext;
 using std::condition_variable;
 using std::endl;
@@ -58,22 +57,80 @@ using std::to_string;
 using std::unique_ptr;
 using std::vector;
 
+/**
+ * @brief The synchronizer's ID (set in main)
+ */
 int synchID;
+
+/**
+ * @brief The cluster the current synchronizer is assigned to (set in main)
+ */
 int clusterID;
-std::atomic_int serverID; // Server corresponding to the synchronzier
+
+/**
+ * @brief The ID of the server the synchronizer is tied to (set in `Heartbeat`)
+ */
+std::atomic_int serverID;
+
+/**
+ * @brief Flag indicating whether the current synchronizer is a master (set in
+ * `Heartbeat`)
+ */
 std::atomic_bool isMaster = false;
+
+/**
+ * @brief A flag indicating whether the synchronizer has been registered to the
+ * coordinator
+ */
 bool registered = false;
 mutex registeredMtx;
 condition_variable registeredCV;
+
+/**
+ * @brief The address of the coorindator (hostname + port)
+ */
 string coordAddr;
 unique_ptr<CoordService::Stub> coord_stub;
+
+/**
+ * @brief The directory prefix for all files the current coordinator is
+ * responsible for, e.g. "cluster_1/1"
+ */
 path dirPrefix;
 
+/**
+ * @brief Gets all users on the current server
+ */
 vector<string> getAllUsers();
+
+/**
+ * @brief Gets all lines from the given user's timeline file
+ *
+ * @param userID The user's ID
+ */
 vector<string> getTimeline(int userID);
+
+/**
+ * @brief Gets all followers from the given user's follower file
+ *
+ * @param userID The user's ID
+ */
 vector<string> getFollowers(int userID);
+
+/**
+ * @brief Sends periodic heartbeats to the coordinator & also determines whether
+ * the current synchronizer is a master
+ *
+ * @param info The current synchronizer's server info
+ */
 void Heartbeat(ServerInfo info);
 
+/**
+ * @class Synchronizer
+ * @brief Base class providing common RabbitMQ functionality shared by both
+ * synchronizer producers & consumers
+ *
+ */
 class Synchronizer {
   protected:
     amqp_connection_state_t conn;
@@ -82,14 +139,24 @@ class Synchronizer {
     int port;
 
   public:
+    /**
+     * @brief Constructs a synchronizer
+     *
+     * @param host The host of the RabbitMQ server to connect to
+     * @param p The port of the RabbitMQ server to connect to
+     */
     Synchronizer(const string& host, int p)
         : channel(1), hostname(host), port(p) {
         setupRabbitMQ();
+        // Declare "fanout" exchanges, which allow each producer to broadcast
+        // messages to relevant consumers
         declareExchange("all_users", "fanout");
         declareExchange("relations", "fanout");
         declareExchange("timelines", "fanout");
     }
 
+    // Ensure that channels & connections are closed before class goes out of
+    // scope
     ~Synchronizer() {
         die_on_amqp_error(amqp_channel_close(conn, channel, AMQP_REPLY_SUCCESS),
                           "Closing channel");
@@ -119,6 +186,8 @@ class Synchronizer {
         die_on_amqp_error(amqp_get_rpc_reply(conn), "Opening channel");
     }
 
+    // Declares a RabbitMQ exchange, which forwards messages to subscribed
+    // consumers
     void declareExchange(const string& exchangeName, const string& type) {
         amqp_exchange_declare(
             conn, channel, amqp_cstring_bytes(exchangeName.c_str()),
@@ -127,10 +196,25 @@ class Synchronizer {
     }
 };
 
+/**
+ * @class SynchronizerProducer
+ * @brief Producer that is solely responsible for publishing messages that share
+ * the current server's state
+ *
+ */
 class SynchronizerProducer : public Synchronizer {
   public:
+    /**
+     * @brief Construct a new synchronizer producer
+     *
+     * @param host The host of the RabbitMQ server
+     * @param p The port of the RabbitMQ server
+     */
     SynchronizerProducer(const string& host, int p) : Synchronizer(host, p) {}
 
+    /**
+     * @brief Publishes the current server's "all_users.txt"
+     */
     void publishUserList() {
         vector<string> users = getAllUsers();
         sort(users.begin(), users.end());
@@ -147,6 +231,9 @@ class SynchronizerProducer : public Synchronizer {
         publishMessage("all_users", "", message);
     }
 
+    /**
+     * @brief Publishes "<user>_followers.txt" for all users on the server
+     */
     void publishUserRelations() {
         Json::Value relations;
         vector<string> users = getAllUsers();
@@ -172,6 +259,9 @@ class SynchronizerProducer : public Synchronizer {
         publishMessage("relations", "", message);
     }
 
+    /**
+     * @brief Publishes "<user>_timeline.txt" for all users on the server
+     */
     void publishTimelines() {
         Json::Value timelineJson;
         Json::FastWriter writer;
@@ -187,6 +277,15 @@ class SynchronizerProducer : public Synchronizer {
     }
 
   private:
+    /**
+     * @brief Publishes a message to the relevant exchange with an optionally
+     * provided routing key
+     *
+     * @param exchangeName The name of the exchange to publish to
+     * @param routingKey The routing key of the message (If none, leave as empty
+     * string)
+     * @param message The message to publish
+     */
     void publishMessage(const string& exchangeName, const string& routingKey,
                         const string& message) {
         int status = amqp_basic_publish(
@@ -198,18 +297,40 @@ class SynchronizerProducer : public Synchronizer {
     }
 };
 
+/**
+ * @class SynchronizerConsumer
+ * @brief Consumer solely responsible for consuming messages sent by
+ * `SynchronizerProducer`s
+ *
+ */
 class SynchronizerConsumer : public Synchronizer {
   private:
+    /**
+     * @brief The names of the consumer's auto-generated queue names
+     */
     vector<amqp_bytes_t> queues;
 
   public:
+    /**
+     * @brief Constructs a synchronizer consumer
+     *
+     * @param host The host of the RabbitMQ server
+     * @param p The port of the RabbitMQ server
+     */
     SynchronizerConsumer(const string& host, int p) : Synchronizer(host, p) {
         queues.push_back(declareAndBindQueue("all_users", ""));
         queues.push_back(declareAndBindQueue("relations", ""));
         queues.push_back(declareAndBindQueue("timelines", ""));
     }
 
+    /**
+     * @brief Block to consume messages; directs messages to their relevant
+     * handlers (routed by exchange)
+     *
+     * @param timeout_ms The amount of time to wait for a single message
+     */
     void consumeMessages(int timeout_ms = 1000) {
+        // Prepare all queues to consume messages
         for (auto& queue : queues) {
             amqp_basic_consume(conn, channel, queue, amqp_empty_bytes, 0, 1, 0,
                                amqp_empty_table);
@@ -220,6 +341,7 @@ class SynchronizerConsumer : public Synchronizer {
         timeout.tv_sec = timeout_ms / 1000;
         timeout.tv_usec = (timeout_ms % 1000) * 1000;
 
+        // Block and wait for incoming messages
         while (true) {
             amqp_envelope_t envelope;
             amqp_maybe_release_buffers(conn);
@@ -233,6 +355,8 @@ class SynchronizerConsumer : public Synchronizer {
                                envelope.message.body.len);
                 string exchange(static_cast<char*>(envelope.exchange.bytes),
                                 envelope.exchange.len);
+
+                // Direct messages to relevant exchange
                 if (exchange == "all_users") {
                     consumeUserList(message);
                 } else if (exchange == "relations") {
@@ -243,6 +367,7 @@ class SynchronizerConsumer : public Synchronizer {
                     log(WARNING,
                         "Received message intended for unknown exchange");
                 }
+
                 amqp_destroy_envelope(&envelope);
                 break;
             }
@@ -258,6 +383,11 @@ class SynchronizerConsumer : public Synchronizer {
     }
 
   private:
+    /**
+     * @brief Consumes an "all_users" message received from RabbitMQ
+     *
+     * @param message The message content
+     */
     void consumeUserList(const string& message) {
         log(INFO, "Consuming user lists");
         vector<string> allUsers;
@@ -273,19 +403,23 @@ class SynchronizerConsumer : public Synchronizer {
         updateAllUsersFile(allUsers);
     }
 
+    /**
+     * @brief Consumes a "relations" message received from RabbitMQ
+     *
+     * @param message The message content
+     */
     void consumeUserRelations(const string& message) {
         log(INFO, "Consuming user relations");
         if (message.empty()) {
             return;
         }
-        vector<string> allUsers = getAllUsers();
         Json::Value jsonMsg;
         Json::Reader reader;
         if (!reader.parse(message, jsonMsg)) {
             return;
         }
 
-        for (const auto& user : allUsers) {
+        for (const auto& user : getAllUsers()) {
             if (!jsonMsg.isMember(user)) {
                 continue;
             }
@@ -293,6 +427,11 @@ class SynchronizerConsumer : public Synchronizer {
         }
     }
 
+    /**
+     * @brief Consumes a "timeline" message received from RabbitMQ
+     *
+     * @param message The message content
+     */
     void consumeTimelines(const string& message) {
         log(INFO, "Consuming timelines");
         if (!message.empty()) {
@@ -315,6 +454,11 @@ class SynchronizerConsumer : public Synchronizer {
         }
     }
 
+    /**
+     * @brief Update "all_users.txt"
+     *
+     * @param users The users read from a RabbitMQ "all_users" message
+     */
     void updateAllUsersFile(const vector<string>& users) {
         vector<string> currentUsers = getAllUsers();
         const path file = dirPrefix / "all_users.txt";
@@ -328,6 +472,13 @@ class SynchronizerConsumer : public Synchronizer {
         }
     }
 
+    /**
+     * @brief Updates the supplied user's follower file
+     *
+     * @param user The user to update followers for
+     * @param jsonMsg The contents of a "relations" message received from
+     * RabbitMQ
+     */
     void updateUserFollowers(const string& user, const Json::Value& jsonMsg) {
         vector<string> followers = getFollowers(stoi(user));
         const path file = dirPrefix / (user + "_followers.txt");
@@ -341,6 +492,12 @@ class SynchronizerConsumer : public Synchronizer {
         }
     }
 
+    /**
+     * @brief Updates the supplied user's timeline
+     *
+     * @param user The user to update the timeline for
+     * @param lines Timeline lines read from RabbitMQ
+     */
     void updateUserTimeline(const string& user, const vector<string>& lines) {
         const path timelineFile = dirPrefix / (user + "_timeline.txt");
         SemGuard lock(timelineFile);
@@ -377,6 +534,15 @@ class SynchronizerConsumer : public Synchronizer {
     }
 
   private:
+    /**
+     * @brief Declares an ephemeral queue an binds it to the supplied exchange
+     * (with an optional binding key). Not that the queue is ephemeral and will
+     * be destroyed when the current connection is destroyed.
+     *
+     * @param exchangeName The exchange to bind the queue to
+     * @param bindingKey The binding key for the queue
+     * @return The auto-generated queue name
+     */
     amqp_bytes_t declareAndBindQueue(const string& exchangeName,
                                      const string& bindingKey) {
         amqp_queue_declare_ok_t* r = amqp_queue_declare(
@@ -394,8 +560,20 @@ class SynchronizerConsumer : public Synchronizer {
     }
 };
 
-void RunServer(string port);
-void publishMessages(string port);
+/**
+ * @brief Start the synchronizer (producer & consumer)
+ */
+void RunServer();
+
+/**
+ * @brief Create a producer, then block and start publishing messages
+ * periodically
+ */
+void publishMessages();
+
+/**
+ * @brief Create a consumer, then block and start consuming messages
+ */
 void consumeMessages();
 
 int main(int argc, char** argv) {
@@ -441,17 +619,17 @@ int main(int argc, char** argv) {
     serverInfo.set_clusterid(clusterID);
     thread hb(Heartbeat, serverInfo);
 
-    RunServer(port);
+    RunServer();
     return 0;
 }
 
-void RunServer(string port) {
+void RunServer() {
     // Wait for registration heartbeat before continuing
     std::unique_lock<mutex> lock(registeredMtx);
     registeredCV.wait(lock, [] { return registered; });
     log(INFO, "Registration complete; setting up synchronizer");
 
-    thread producer(publishMessages, port);
+    thread producer(publishMessages);
     thread consumer(consumeMessages);
 
     producer.join();
@@ -495,20 +673,8 @@ void Heartbeat(ServerInfo serverInfo) {
     }
 }
 
-void publishMessages(string port) {
+void publishMessages() {
     SynchronizerProducer producer("rabbitmq", 5672);
-
-    ServerInfo msg;
-    Confirmation c;
-    msg.set_serverid(synchID);
-    msg.set_hostname("127.0.0.1");
-    msg.set_port(port);
-    msg.set_type("follower");
-
-    ServerList followerServers;
-    ID id;
-    id.set_id(synchID);
-
     while (true) {
         if (isMaster) {
             producer.publishUserList();

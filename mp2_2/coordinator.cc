@@ -192,7 +192,8 @@ class CoordServiceImpl final : public CoordService::Service {
         lock_guard<mutex> lock(synchronizerMtx);
         for (auto& cluster : synchronizers) {
             for (auto& synchronizer : cluster) {
-                if (synchronizer->serverID == synchronizerID) continue;
+                if (synchronizer->serverID == synchronizerID)
+                    continue;
                 reply->add_serverid(synchronizer->serverID);
                 reply->add_hostname(synchronizer->hostname);
                 reply->add_port(synchronizer->port);
@@ -247,7 +248,8 @@ int main(int argc, char** argv) {
 node_ptr findServer(int clusterID, int serverID, string type) {
     table servers = type == SERVER ? routingTable : synchronizers;
     for (auto& node : servers[clusterID - 1])
-        if (node->serverID == serverID) return node;
+        if (node->serverID == serverID)
+            return node;
     return nullptr;
 }
 
@@ -290,12 +292,14 @@ bool zNode::isActive() { return !missed_heartbeat; }
 
 node_ptr getMasterServer(int clusterID) {
     for (auto& s : routingTable[clusterID - 1]) {
-        if (s->isActive()) return s;
+        if (s->isActive())
+            return s;
     }
     return nullptr;
 }
 
 node_ptr getSlaveServer(int clusterID) {
-    if (routingTable[clusterID - 1].empty()) return nullptr;
+    if (routingTable[clusterID - 1].empty())
+        return nullptr;
     return routingTable[clusterID - 1].back();
 }
