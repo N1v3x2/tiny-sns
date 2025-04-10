@@ -84,3 +84,20 @@ To avoid the inteferences from residual files, in `csce438_mp2_2_container`:
 
     rm -rf /dev/shm/*
     rm -rf ./cluster_*
+
+# 5. Trouble shooting and clarifications
+
+## 5.1 Buggy rabbitMQ skeleton code in synchronizer.cc
+
+Thanks to our classmate Ivan Zaplatar: 
+
+> * Firstly, we shouldn't consume from anyone elses queue except ours as that would prevent another synchronizer from reading that message. 
+> * Secondly, amqp_consume_message() takes an envelope argument which is a amqp_envelope_t and has information on which queue the message was consumed from which wasn't being used in the starter code. So calling amqp_consume_message() could give us three different kinds of messages, 2 of which wouldn't be the message we wanted. That's why I saw wrong messages because we never used the amqp_envelope_t to correctly route our data. I now instead have a single consumeMessages() function that consumes a message then routes it accordingly after inspecting the envelope.
+
+## 5.2 The original slave Syncrhonizer F_S2 becomes a master Synchronizer on cluster 2
+
+> In the manual it states: "Follower Synchronization processes on the Slave machines do not send updates to other Follower Synchronization processes." so why would the slave be able to advertise the existence of user 5 in test case 3 of MP2.2?
+
+The manual is correct. After the original M2 is killed, the original slave S2 becomes the new Master on cluster 2. Accordingly, the original master Synchronizer F_M2 becomes a slave Synchronizer (and being orphaned) and the original slave synchronizer F_S2 is not a slave synchronizer anymore. Instead, original slave synchronizer F_S2 becomes the master synchronizer for cluster2.
+
+In this way, after you killed the original master server on cluster2, u5 would interact with the new master server (i.e., original slave server) on cluster2. The original slave machine becomes a new master machine. The original synchronizer F_S2 for the original slave machine on cluster2 will be responsible to send u5’s information to other clusters.
