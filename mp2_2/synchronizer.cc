@@ -166,6 +166,9 @@ class Synchronizer {
     }
 
   private:
+    /**
+     * @brief Sets up a TCP connection to the RabbitMQ server & opens a channel
+     */
     void setupRabbitMQ() {
         conn = amqp_new_connection();
         amqp_socket_t* socket = amqp_tcp_socket_new(conn);
@@ -186,8 +189,13 @@ class Synchronizer {
         die_on_amqp_error(amqp_get_rpc_reply(conn), "Opening channel");
     }
 
-    // Declares a RabbitMQ exchange, which forwards messages to subscribed
-    // consumers
+    /**
+     * @brief Declares a RabbitMQ exchange, which forwards messages to
+     * subscribed consumers
+     *
+     * @param exchangeName The name of the exchange
+     * @param type The type of the exchange ("fanout," "direct,", "topic," etc.)
+     */
     void declareExchange(const string& exchangeName, const string& type) {
         amqp_exchange_declare(
             conn, channel, amqp_cstring_bytes(exchangeName.c_str()),
@@ -227,7 +235,6 @@ class SynchronizerProducer : public Synchronizer {
         Json::FastWriter writer;
         string message = writer.write(userList);
         log(INFO, "Publishing user list");
-
         publishMessage("all_users", "", message);
     }
 
@@ -255,7 +262,6 @@ class SynchronizerProducer : public Synchronizer {
         Json::FastWriter writer;
         string message = writer.write(relations);
         log(INFO, "Publishing user relations");
-
         publishMessage("relations", "", message);
     }
 
@@ -326,10 +332,8 @@ class SynchronizerConsumer : public Synchronizer {
     /**
      * @brief Block to consume messages; directs messages to their relevant
      * handlers (routed by exchange)
-     *
-     * @param timeout_ms The amount of time to wait for a single message
      */
-    void consumeMessages(int timeout_ms = 1000) {
+    void consumeMessages() {
         // Prepare all queues to consume messages
         for (auto& queue : queues) {
             amqp_basic_consume(conn, channel, queue, amqp_empty_bytes, 0, 1, 0,
@@ -337,17 +341,13 @@ class SynchronizerConsumer : public Synchronizer {
             die_on_amqp_error(amqp_get_rpc_reply(conn), "Consuming");
         }
 
-        struct timeval timeout;
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
-
         // Block and wait for incoming messages
         while (true) {
             amqp_envelope_t envelope;
             amqp_maybe_release_buffers(conn);
 
             amqp_rpc_reply_t res =
-                amqp_consume_message(conn, &envelope, &timeout, 0);
+                amqp_consume_message(conn, &envelope, NULL, 0);
 
             switch (res.reply_type) {
             case AMQP_RESPONSE_NORMAL: {

@@ -86,7 +86,9 @@ struct Client {
 };
 
 ServerInfo GetSlaveInfo();
-unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port);
+bool isMaster();
+bool hasSlave();
+unique_ptr<SNSService::Stub> GetSlaveStub();
 Message MakeMessage(const string& username, const string& msg);
 
 class SNSServiceImpl final : public SNSService::Service {
@@ -152,19 +154,15 @@ class SNSServiceImpl final : public SNSService::Service {
             fs << username << endl;
         }
 
-        ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverID;
-
-        if (isMaster) {
-            unique_ptr<SNSService::Stub> slaveStub =
-                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
-            ClientContext masterSlaveCtx;
+        if (isMaster() && hasSlave()) {
+            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub();
+            ClientContext ctx;
             Request req;
             req.set_username(username);
             req.add_arguments(toFollow);
-            Reply rep;
+            Reply reply;
             log(INFO, "Master: replicating Follow state to slave");
-            slaveStub->Follow(&masterSlaveCtx, req, &rep);
+            slaveStub->Follow(&ctx, req, &reply);
         }
 
         return Status::OK;
@@ -222,20 +220,14 @@ class SNSServiceImpl final : public SNSService::Service {
             fs << username << endl;
         }
 
-        ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverID;
-
-        // Master: replicate to slave
-        if (isMaster) {
-            unique_ptr<SNSService::Stub> slave_stub =
-                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
-
-            ClientContext masterSlaveCtx;
+        if (isMaster() && hasSlave()) {
+            unique_ptr<SNSService::Stub> slave_stub = GetSlaveStub();
+            ClientContext ctx;
             Request req;
             req.set_username(username);
             Reply rep;
             log(INFO, "Master: replicating Login state to slave");
-            slave_stub->Login(&masterSlaveCtx, req, &rep);
+            slave_stub->Login(&ctx, req, &rep);
         }
 
         return Status::OK;
@@ -312,15 +304,11 @@ class SNSServiceImpl final : public SNSService::Service {
             }
         });
 
-        ServerInfo slaveInfo = GetSlaveInfo();
-        bool isMaster = slaveInfo.serverid() != serverID;
         std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> slaveStream;
-        ClientContext masterSlaveCtx;
-
-        if (isMaster) {
-            unique_ptr<SNSService::Stub> slaveStub =
-                GetSlaveStub(slaveInfo.hostname(), slaveInfo.port());
-            slaveStream = slaveStub->Timeline(&masterSlaveCtx);
+        ClientContext ctx;
+        if (isMaster() && hasSlave()) {
+            unique_ptr<SNSService::Stub> slaveStub = GetSlaveStub();
+            slaveStream = slaveStub->Timeline(&ctx);
             log(INFO, "Master: establishing timeline connection to "
                       "slave");
             string connMsg = "Timeline";
@@ -334,7 +322,7 @@ class SNSServiceImpl final : public SNSService::Service {
                           " just posted; sending post to followers...");
 
             lock_guard<mutex> lock(clientMtx);
-            for (auto& [followerUname, follower] : client->followers) {
+            for (auto& [_, follower] : client->followers) {
                 {
                     const string file = follower->getTimelineFile();
                     SemGuard fileLock(file);
@@ -346,9 +334,7 @@ class SNSServiceImpl final : public SNSService::Service {
                        << "W " << msg.msg() << '\n';
                     fs.close();
                 }
-
-                // Master: replicate to slave
-                if (isMaster) {
+                if (isMaster() && hasSlave()) {
                     log(INFO, "Master: replicating "
                               "timeline post to slave");
                     slaveStream->Write(msg);
@@ -360,17 +346,31 @@ class SNSServiceImpl final : public SNSService::Service {
     }
 };
 
-ServerInfo GetSlaveInfo() {
-    ClientContext masterSlaveCtx;
-    ID id;
-    id.set_id(clusterID);
-    ServerInfo slaveInfo;
-    coordStub->GetSlave(&masterSlaveCtx, id, &slaveInfo);
-    return slaveInfo;
+bool isMaster() {
+    ClientContext ctx;
+    ID req;
+    req.set_id(serverID);
+    ServerInfo reply;
+    coordStub->GetSlave(&ctx, req, &reply);
+    return serverID != reply.serverid();
 }
 
-unique_ptr<SNSService::Stub> GetSlaveStub(string hostname, string port) {
-    string slaveAddr = hostname + ":" + port;
+bool hasSlave() {
+    ClientContext ctx;
+    ID req;
+    req.set_id(serverID);
+    ServerInfo reply;
+    coordStub->GetSlave(&ctx, req, &reply);
+    return reply.serverid() != -1;
+}
+
+unique_ptr<SNSService::Stub> GetSlaveStub() {
+    ClientContext ctx;
+    ID req;
+    req.set_id(clusterID);
+    ServerInfo reply;
+    coordStub->GetSlave(&ctx, req, &reply);
+    string slaveAddr = reply.hostname() + ":" + reply.port();
     return SNSService::NewStub(
         grpc::CreateChannel(slaveAddr, grpc::InsecureChannelCredentials()));
 }

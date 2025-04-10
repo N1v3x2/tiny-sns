@@ -147,12 +147,17 @@ class CoordServiceImpl final : public CoordService::Service {
 
         lock_guard<mutex> lock(routingTableMtx);
         node_ptr slave = getSlaveServer(clusterID);
-        reply->set_serverid(slave->serverID);
-        reply->set_hostname(slave->hostname);
-        reply->set_port(slave->port);
-        reply->set_type(slave->type);
-        reply->set_clusterid(clusterID);
-        reply->set_ismaster(false);
+        if (!slave) {
+            log(INFO, "No slave server found");
+            reply->set_serverid(-1);
+        } else {
+            reply->set_serverid(slave->serverID);
+            reply->set_hostname(slave->hostname);
+            reply->set_port(slave->port);
+            reply->set_type(slave->type);
+            reply->set_clusterid(clusterID);
+            reply->set_ismaster(false);
+        }
 
         log(INFO, "Sending `ServerInfo` from `GetSlave` request");
         return Status::OK;
@@ -301,5 +306,7 @@ node_ptr getMasterServer(int clusterID) {
 node_ptr getSlaveServer(int clusterID) {
     if (routingTable[clusterID - 1].empty())
         return nullptr;
-    return routingTable[clusterID - 1].back();
+    node_ptr master = getMasterServer(clusterID);
+    node_ptr slave = routingTable[clusterID - 1].back();
+    return slave->serverID == master->serverID ? nullptr : slave;
 }
